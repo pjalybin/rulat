@@ -62,6 +62,22 @@ func TestGreekClassicalDiphthongs(t *testing.T) {
 	}
 }
 
+func TestGreekClassicalYpsilonBeforeVowelUsesV(t *testing.T) {
+	cases := map[string]string{
+		"Εὔα":        "Eva",
+		"εὐαγγέλιον": "evangelion",
+	}
+	for input, want := range cases {
+		got, ok := transliterateGreek(input)
+		if !ok {
+			t.Fatalf("transliterateGreek(%q) did not detect Greek input", input)
+		}
+		if got != want {
+			t.Fatalf("transliterateGreek(%q) = %q, want %q", input, got, want)
+		}
+	}
+}
+
 func TestGreekClassicalUsesCY(t *testing.T) {
 	got, ok := transliterateGreek("Βαβυλών")
 	if !ok {

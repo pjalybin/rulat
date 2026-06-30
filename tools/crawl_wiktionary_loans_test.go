@@ -517,6 +517,56 @@ func TestRowFromWordPageMarksCapitalizedNameMatchCase(t *testing.T) {
 	}
 }
 
+func TestRowFromWordPageUsesResolvedGreekBeforeLaterSense(t *testing.T) {
+	page := testWikiPage("Ева", ruNounPageContent("{{сущ-ru|Е́ва|жо 1a|З=Е́в}}\n{{собств.|тип=личное имя}}\n{{морфо-ru|Ев|+а|и=}}", "Происходит от {{этимология:Ева|да}}\n\nВ значении «лицо, перехватывающее сообщения» происходит от созвучия с {{lang|en|eavesdropper}}."))
+	resolver := &templateResolver{cache: map[string][]loanCandidate{
+		"Ева": []loanCandidate{{Source: "Greek", Greek: "Εὔα"}},
+	}}
+
+	row, ok, filtered := rowFromWordPage(page, crawlOptions{
+		Resolver:                     resolver,
+		StripStemDiacritics:          true,
+		TrimFinalStemVowels:          true,
+		LanguageWhitelist:            map[string]bool{"Greek": true, "English": true},
+		TranslationLanguageWhitelist: map[string]bool{"Greek": true, "English": true},
+	})
+	if filtered {
+		t.Fatal("row was unexpectedly filtered")
+	}
+	if !ok {
+		t.Fatal("row was not extracted")
+	}
+	if row.CyrillicStem != "ев" || row.LatinStem != "Ev" || row.OriginalLatin != "Eva" || row.OriginalGreek != "Εὔα" || row.Source != "Greek" {
+		t.Fatalf("row = %#v, want ев/Ev from Greek Εὔα", row)
+	}
+	if row.MatchedRussianReading != "ев" {
+		t.Fatalf("matched reading = %q, want ев", row.MatchedRussianReading)
+	}
+}
+
+func TestRowFromWordPageDropsSilentGreekRoughBreathing(t *testing.T) {
+	page := testWikiPage("Исав", ruNounPageContent("{{сущ ru m a 1a|основа=Исáв}}\n{{собств.|тип=личное имя}}\n{{морфо-ru|Исав|+∅}}", "Происходит от др.-евр. [[‏עֵשָׂו]], «Эсав» — волосатый; греч. [[Ἡσαῦ]]"))
+
+	row, ok, filtered := rowFromWordPage(page, crawlOptions{
+		StripStemDiacritics:          true,
+		TrimFinalStemVowels:          true,
+		LanguageWhitelist:            map[string]bool{"Greek": true},
+		TranslationLanguageWhitelist: map[string]bool{"Greek": true},
+	})
+	if filtered {
+		t.Fatal("row was unexpectedly filtered")
+	}
+	if !ok {
+		t.Fatal("row was not extracted")
+	}
+	if row.CyrillicStem != "исав" || row.LatinStem != "Esau" || row.OriginalLatin != "Hesau" || row.OriginalGreek != "Ἡσαῦ" || row.Source != "Greek" {
+		t.Fatalf("row = %#v, want исав/Esau from Greek Ἡσαῦ with original_latin=Hesau", row)
+	}
+	if row.MatchedRussianReading != "исав" {
+		t.Fatalf("matched reading = %q, want исав", row.MatchedRussianReading)
+	}
+}
+
 func TestMeaningTranslationLanguageWhitelistDetectsDefaultLanguages(t *testing.T) {
 	cases := map[string]string{
 		"город в США":                  "English",
@@ -728,6 +778,10 @@ func TestTrimLatinStemToRussianSound(t *testing.T) {
 		{"ёлк", "yolk", "stem", "yolk", "елк", true},
 		{"йолк", "yolk", "stem", "yolk", "йолк", true},
 		{"гиперборе", "Hyperborēī", "word", "Hyperborē", "гиперборе", true},
+		{"ев", "Eu", "stem", "Eu", "ев", true},
+		{"ев", "Eva", "stem", "Ev", "ев", true},
+		{"исав", "Hesau", "stem", "Esau", "исав", true},
+		{"ев", "eavesdropper", "stem", "", "", false},
 	}
 	for _, tc := range cases {
 		got, matchedReading, ok := trimLatinStemToRussianSound(tc.cyr, tc.latin, tc.mode, true)

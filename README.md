@@ -452,9 +452,9 @@ vowels when the Russian stem ends in a consonant, so `альков` from French
 `alcôve` becomes `latin_stem=alcov,original_latin=alcôve`.
 For Greek-script etymologies, basic Ancient Greek declensional stemming is
 applied before transliteration: `εὐαγγέλιον` becomes
-`latin_stem=euangeli,original_latin=euangeli,original_greek=εὐαγγέλιον`.
+`latin_stem=evangeli,original_latin=evangeli,original_greek=εὐαγγέλιον`.
 The `-ιον` family stems to `-ι`, so `εὐαγγέλιον`, `εὐαγγελίου`,
-`εὐαγγελίῳ`, and `εὐαγγέλιᾰ` all produce `euangeli`. Common endings such as
+`εὐαγγελίῳ`, and `εὐαγγέλιᾰ` all produce `evangeli`. Common endings such as
 `-ος`, `-ον`, `-ης`, `-ας`, `-ις`, `-υς`, and `-ους` lose the final case
 consonant. Russian loan stems use the nominative loan shape for common Greek
 neuters, so `πρόβλημα` becomes `problem`, not `problemat`; `-εύς` loses the
@@ -463,6 +463,8 @@ as in `Ἀπόλλων -> Apollon`. Final `ξ` and `ψ` recover basic velar/labi
 as `κ` and `π`.
 Greek etymology candidates are romanized in Classical mode: `κ -> c`,
 standalone `υ -> y`, `αι -> ae`, `οι -> oe`, `ου -> u`, and `αυ/ευ/ηυ -> au/eu/eu`.
+For loan matching, `υ` in `αυ`, `ευ`, `ηυ`, or `ωυ` is written as `v`
+before another Greek vowel, so `Εὔα` becomes `Eva`.
 Iota subscripts map as `ᾳ -> ai`, `ῃ -> ei`, and `ῳ -> oi`.
 
 The Greek romanizer can also be built and run by itself. It is a text filter

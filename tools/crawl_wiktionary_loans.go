@@ -1366,13 +1366,7 @@ func isRussianNonNounPOSTemplate(name string) bool {
 func extractPageLoanCandidates(ruSection string, resolver *templateResolver, translationLanguageWhitelist map[string]bool) []loanCandidate {
 	var candidates []loanCandidate
 	for _, section := range extractEtymologySections(ruSection) {
-		candidates = append(candidates, candidatesFromTextMarkers(stripWikiMarkup(section))...)
-		candidates = append(candidates, candidatesFromTemplates(section)...)
-		if resolver != nil {
-			for _, name := range etymologyTemplateNames(section) {
-				candidates = append(candidates, resolver.resolve(name)...)
-			}
-		}
+		candidates = append(candidates, candidatesFromEtymologySection(section, resolver)...)
 	}
 	if len(candidates) > 0 {
 		return candidates
@@ -1387,6 +1381,32 @@ func extractPageLoanCandidates(ruSection string, resolver *templateResolver, tra
 		return filterLoanCandidatesByLanguage(candidates, translationLanguageWhitelist)
 	}
 	return nil
+}
+
+func candidatesFromEtymologySection(section string, resolver *templateResolver) []loanCandidate {
+	var candidates []loanCandidate
+	start := 0
+	for _, m := range etymologyTemplateRe.FindAllStringSubmatchIndex(section, -1) {
+		if m[0] > start {
+			candidates = append(candidates, candidatesFromEtymologyChunk(section[start:m[0]])...)
+		}
+		if resolver != nil && m[2] >= 0 && m[3] >= 0 {
+			name := strings.TrimSpace(section[m[2]:m[3]])
+			candidates = append(candidates, resolver.resolve(name)...)
+		}
+		start = m[1]
+	}
+	if start < len(section) {
+		candidates = append(candidates, candidatesFromEtymologyChunk(section[start:])...)
+	}
+	return candidates
+}
+
+func candidatesFromEtymologyChunk(chunk string) []loanCandidate {
+	var candidates []loanCandidate
+	candidates = append(candidates, candidatesFromTextMarkers(stripWikiMarkup(chunk))...)
+	candidates = append(candidates, candidatesFromTemplates(chunk)...)
+	return candidates
 }
 
 func extractTranslationCandidates(ruSection string) []loanCandidate {
@@ -1717,14 +1737,69 @@ func trimLatinStemToRussianSound(cyr, latin, mode string, trimFinalStemVowels bo
 		if prefix == "" {
 			continue
 		}
-		stem := makeLatinStem(cyr, prefix, mode, trimFinalStemVowels)
-		stem = trimFinalLatinVowelsForRussianSound(cyr, stem, mode, trimFinalStemVowels)
-		readings := sourceSoundReadings(stem)
-		if matchedVariant, ok := readingsMatchTargetVariant(readings, targetReading); ok {
-			return stem, russianReadingCSVString(matchedVariant), true
+		for _, stem := range latinStemCandidatesForPrefix(cyr, prefix, mode, trimFinalStemVowels) {
+			readings := sourceSoundReadings(stem)
+			if matchedVariant, ok := readingsMatchTargetVariant(readings, targetReading); ok {
+				if !latinPrefixIsSubstantial(latin, prefix) {
+					continue
+				}
+				return stem, russianReadingCSVString(matchedVariant), true
+			}
 		}
 	}
 	return "", "", false
+}
+
+func latinStemCandidatesForPrefix(cyr, prefix, mode string, trimFinalStemVowels bool) []string {
+	baseCandidates := []string{prefix}
+	trimmed := makeLatinStem(cyr, prefix, mode, trimFinalStemVowels)
+	trimmed = trimFinalLatinVowelsForRussianSound(cyr, trimmed, mode, trimFinalStemVowels)
+	if trimmed != prefix {
+		baseCandidates = append(baseCandidates, trimmed)
+	}
+
+	var candidates []string
+	for _, candidate := range baseCandidates {
+		if withoutH, ok := dropLeadingLatinH(candidate); ok {
+			candidates = appendUnique(candidates, withoutH)
+		}
+		candidates = appendUnique(candidates, candidate)
+	}
+	return candidates
+}
+
+func dropLeadingLatinH(s string) (string, bool) {
+	runes := []rune(s)
+	if len(runes) < 2 {
+		return "", false
+	}
+	if runes[0] != 'h' && runes[0] != 'H' {
+		return "", false
+	}
+	dropped := append([]rune(nil), runes[1:]...)
+	if unicode.IsUpper(runes[0]) && len(dropped) > 0 {
+		dropped[0] = unicode.ToUpper(dropped[0])
+	}
+	return string(dropped), true
+}
+
+func latinPrefixIsSubstantial(latin, prefix string) bool {
+	sourceLetters := countLetters(latin)
+	prefixLetters := countLetters(prefix)
+	if sourceLetters == 0 || prefixLetters == 0 {
+		return false
+	}
+	return prefixLetters*2 >= sourceLetters
+}
+
+func countLetters(s string) int {
+	n := 0
+	for _, r := range s {
+		if unicode.IsLetter(r) {
+			n++
+		}
+	}
+	return n
 }
 
 func trimFinalLatinVowelsForRussianSound(cyr, latin, mode string, trimFinalStemVowels bool) string {

@@ -201,7 +201,8 @@ func transliterateGreekWithOptions(s string, opts greekTransliterationOptions) (
 		hasGreek = true
 
 		if next, ok := nextGreekToken(tokens, i+1); ok && formsGreekDiphthong(t, next.greekToken) {
-			out.WriteString(transliterateGreekDiphthong(t, next.greekToken, wordStart, opts))
+			following, _ := nextGreekToken(tokens, next.index+1)
+			out.WriteString(transliterateGreekDiphthong(t, next.greekToken, following.greekToken, wordStart, opts))
 			i = next.index
 			wordStart = false
 			prevGreek = next.base
@@ -757,7 +758,7 @@ func formsGreekDiphthong(a, b greekToken) bool {
 	}
 }
 
-func transliterateGreekDiphthong(a, b greekToken, wordStart bool, opts greekTransliterationOptions) string {
+func transliterateGreekDiphthong(a, b, following greekToken, wordStart bool, opts greekTransliterationOptions) string {
 	digraph := ""
 	switch opts.scheme {
 	case greekRomanizationClassical:
@@ -765,13 +766,25 @@ func transliterateGreekDiphthong(a, b greekToken, wordStart bool, opts greekTran
 		case a.base == 'α' && b.base == 'ι':
 			digraph = "ae"
 		case a.base == 'α' && b.base == 'υ':
-			digraph = "au"
+			if isGreekVowel(following.base) {
+				digraph = "av"
+			} else {
+				digraph = "au"
+			}
 		case a.base == 'ε' && b.base == 'ι':
 			digraph = "e"
 		case a.base == 'ε' && b.base == 'υ':
-			digraph = "eu"
+			if isGreekVowel(following.base) {
+				digraph = "ev"
+			} else {
+				digraph = "eu"
+			}
 		case a.base == 'η' && b.base == 'υ':
-			digraph = "eu"
+			if isGreekVowel(following.base) {
+				digraph = "ev"
+			} else {
+				digraph = "eu"
+			}
 		case a.base == 'ο' && b.base == 'ι':
 			digraph = "oe"
 		case a.base == 'ο' && b.base == 'υ':
@@ -779,7 +792,11 @@ func transliterateGreekDiphthong(a, b greekToken, wordStart bool, opts greekTran
 		case a.base == 'υ' && b.base == 'ι':
 			digraph = "ui"
 		case a.base == 'ω' && b.base == 'υ':
-			digraph = "ou"
+			if isGreekVowel(following.base) {
+				digraph = "ov"
+			} else {
+				digraph = "ou"
+			}
 		}
 	default:
 		switch {
@@ -822,6 +839,15 @@ func transliterateGreekDiphthong(a, b greekToken, wordStart bool, opts greekTran
 		digraph = "h" + digraph
 	}
 	return applyGreekCase(digraph, a.upper)
+}
+
+func isGreekVowel(r rune) bool {
+	switch r {
+	case 'α', 'ε', 'η', 'ι', 'ο', 'υ', 'ω':
+		return true
+	default:
+		return false
+	}
 }
 
 func hasGammaNasal(tokens []greekToken, start int) bool {
