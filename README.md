@@ -403,7 +403,9 @@ API, extracts the Russian section, reads `=== Этимология ===`, resolve
 forms, filters by source language, and writes the source word page into the
 `url` column. Generated rows keep Latin source spelling in `original_latin`,
 and Greek source spelling in `original_greek` while using a loanword-oriented
-Greek-to-Latin stem conversion for `latin_stem`.
+Greek-to-Latin stem conversion for `latin_stem`. Page mode lists titles first
+and only loads word pages whose titles consist exclusively of Russian alphabet
+letters, case-insensitively.
 Generated `latin_stem` values remove Latin diacritics and drop final Latin
 vowels when the Russian stem ends in a consonant, so `альков` from French
 `alcôve` becomes `latin_stem=alcov,original_latin=alcôve`.
@@ -466,10 +468,15 @@ GO111MODULE=off go run ./tools -from альков -page-limit 100 -limit 20 -pro
 `-progress-every N` logs page-mode counters to stderr after each `N` inspected
 pages. The default is `0`, which disables progress logs.
 
-Crawler HTTP requests retry transient failures by default: `408`, `429`, `500`,
-`502`, `503`, and `504`, plus transport errors. `-http-retries` controls the
+Crawler HTTP behavior follows Wikimedia API rate-limit etiquette: requests are
+serial, the default `User-Agent` identifies this project, `maxlag=5` is sent by
+default, and `-request-delay` defaults to `350ms` to stay below the
+unauthenticated User-Agent-only request bucket. Override the contact string with
+`-user-agent` when running your own crawl. HTTP requests retry transient
+failures by default: `408`, `429`, `500`, `502`, `503`, and `504`, plus
+transport errors and MediaWiki `maxlag` responses. `-http-retries` controls the
 retry budget and defaults to `5`; `-http-retry-delay` controls the initial
-exponential backoff delay and defaults to `2s`. `Retry-After` is honored when
+exponential backoff delay and defaults to `5s`. `Retry-After` is honored when
 the server sends it.
 
 ## Dictionary matching behavior

@@ -16,6 +16,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 )
@@ -25,8 +26,11 @@ const (
 	defaultAppendixTitle     = "Приложение:Заимствованные слова в русском языке"
 	defaultLanguageWhitelist = "English,German,French,Italian,Greek,Latin,Dutch,Hebrew,Swedish,Danish,Spanish"
 	defaultHTTPRetries       = 5
-	defaultHTTPRetryDelay    = 2 * time.Second
+	defaultHTTPRetryDelay    = 5 * time.Second
+	defaultMaxlag            = 5
+	defaultRequestDelay      = 350 * time.Millisecond
 	maxHTTPRetryDelay        = 30 * time.Second
+	defaultUserAgent         = "rulat-wiktionary-loan-crawler/0.1 (https://github.com/pjalybin/rulat)"
 	wiktionaryBaseURL        = "https://ru.wiktionary.org/wiki/"
 )
 
@@ -46,9 +50,16 @@ type csvRow struct {
 
 type wikiResponse struct {
 	Continue map[string]string `json:"continue"`
+	Error    *wikiAPIError     `json:"error"`
 	Query    struct {
 		Pages []wikiPage `json:"pages"`
 	} `json:"query"`
+}
+
+type wikiAPIError struct {
+	Code string  `json:"code"`
+	Info string  `json:"info"`
+	Lag  float64 `json:"lag"`
 }
 
 type wikiPage struct {
@@ -88,9 +99,14 @@ type templateResolver struct {
 }
 
 var (
-	httpRetries    = defaultHTTPRetries
-	httpRetryDelay = defaultHTTPRetryDelay
-	retrySleep     = time.Sleep
+	apiMaxlag        = defaultMaxlag
+	apiRequestDelay  = defaultRequestDelay
+	apiUserAgent     = defaultUserAgent
+	httpRetries      = defaultHTTPRetries
+	httpRetryDelay   = defaultHTTPRetryDelay
+	lastAPIRequestAt time.Time
+	apiRequestMu     sync.Mutex
+	retrySleep       = time.Sleep
 )
 
 var (
@@ -195,6 +211,9 @@ func main() {
 	delay := flag.Duration("delay", 100*time.Millisecond, "delay between page requests when -enrich-pages is set")
 	retryAttempts := flag.Int("http-retries", defaultHTTPRetries, "retry attempts for transient HTTP failures; 0 disables retries")
 	retryBaseDelay := flag.Duration("http-retry-delay", defaultHTTPRetryDelay, "initial delay for transient HTTP retries; doubles up to 30s")
+	maxlag := flag.Int("maxlag", defaultMaxlag, "MediaWiki maxlag value in seconds; use -1 to disable")
+	requestDelay := flag.Duration("request-delay", defaultRequestDelay, "minimum delay between Wikimedia API requests")
+	userAgent := flag.String("user-agent", defaultUserAgent, "HTTP User-Agent sent to Wikimedia APIs; include a URL or email contact")
 	flag.Parse()
 
 	if *retryAttempts < 0 {
@@ -203,8 +222,20 @@ func main() {
 	if *retryBaseDelay < 0 {
 		exitf("-http-retry-delay must be >= 0")
 	}
+	if *maxlag < -1 {
+		exitf("-maxlag must be >= -1")
+	}
+	if *requestDelay < 0 {
+		exitf("-request-delay must be >= 0")
+	}
+	if strings.TrimSpace(*userAgent) == "" {
+		exitf("-user-agent must not be empty")
+	}
 	httpRetries = *retryAttempts
 	httpRetryDelay = *retryBaseDelay
+	apiMaxlag = *maxlag
+	apiRequestDelay = *requestDelay
+	apiUserAgent = strings.TrimSpace(*userAgent)
 
 	languageWhitelist, err := parseLanguageWhitelist(*languages)
 	if err != nil {
@@ -356,18 +387,8 @@ func fetchPage(client *http.Client, title string, categories bool) (wikiPage, er
 		values.Set("cllimit", "max")
 	}
 
-	req, err := newAPIRequest(values)
+	parsed, err := doAPIQuery(client, values)
 	if err != nil {
-		return wikiPage{}, err
-	}
-	resp, err := doAPIRequest(client, req)
-	if err != nil {
-		return wikiPage{}, err
-	}
-	defer resp.Body.Close()
-
-	var parsed wikiResponse
-	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
 		return wikiPage{}, err
 	}
 	if len(parsed.Query.Pages) == 0 {
@@ -377,12 +398,55 @@ func fetchPage(client *http.Client, title string, categories bool) (wikiPage, er
 }
 
 func newAPIRequest(values url.Values) (*http.Request, error) {
+	if apiMaxlag >= 0 {
+		values = cloneURLValues(values)
+		values.Set("maxlag", fmt.Sprintf("%d", apiMaxlag))
+	}
 	req, err := http.NewRequest(http.MethodGet, apiURL+"?"+values.Encode(), nil)
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("User-Agent", "rulat-wiktionary-loan-crawler/0.1 (https://ru.wiktionary.org/)")
+	req.Header.Set("User-Agent", apiUserAgent)
 	return req, nil
+}
+
+func doAPIQuery(client *http.Client, values url.Values) (wikiResponse, error) {
+	attempts := httpRetries + 1
+	if attempts < 1 {
+		attempts = 1
+	}
+
+	var lastErr error
+	for attempt := 0; attempt < attempts; attempt++ {
+		req, err := newAPIRequest(values)
+		if err != nil {
+			return wikiResponse{}, err
+		}
+		resp, err := doAPIRequest(client, req)
+		if err != nil {
+			return wikiResponse{}, err
+		}
+		retryAfter := resp.Header.Get("Retry-After")
+
+		var parsed wikiResponse
+		err = json.NewDecoder(resp.Body).Decode(&parsed)
+		resp.Body.Close()
+		if err != nil {
+			return wikiResponse{}, err
+		}
+		if parsed.Error == nil || parsed.Error.Code != "maxlag" {
+			return parsed, nil
+		}
+
+		lastErr = fmt.Errorf("GET %s: MediaWiki maxlag: %s", req.URL.Redacted(), strings.TrimSpace(parsed.Error.Info))
+		if attempt+1 >= attempts {
+			return wikiResponse{}, lastErr
+		}
+		delay := httpRetryBackoffDelay(attempt, retryAfter)
+		logHTTPRetry(req, attempt+2, attempts, delay, lastErr)
+		retrySleep(delay)
+	}
+	return wikiResponse{}, lastErr
 }
 
 func doAPIRequest(client *http.Client, req *http.Request) (*http.Response, error) {
@@ -393,6 +457,7 @@ func doAPIRequest(client *http.Client, req *http.Request) (*http.Response, error
 
 	var lastErr error
 	for attempt := 0; attempt < attempts; attempt++ {
+		waitForAPIRequestSlot()
 		resp, err := client.Do(req.Clone(req.Context()))
 		retryAfter := ""
 		if err == nil && resp.StatusCode == http.StatusOK {
@@ -422,6 +487,24 @@ func doAPIRequest(client *http.Client, req *http.Request) (*http.Response, error
 		retrySleep(delay)
 	}
 	return nil, lastErr
+}
+
+func waitForAPIRequestSlot() {
+	if apiRequestDelay <= 0 {
+		return
+	}
+	apiRequestMu.Lock()
+	defer apiRequestMu.Unlock()
+
+	now := time.Now()
+	if !lastAPIRequestAt.IsZero() {
+		next := lastAPIRequestAt.Add(apiRequestDelay)
+		if now.Before(next) {
+			retrySleep(next.Sub(now))
+			now = time.Now()
+		}
+	}
+	lastAPIRequestAt = now
 }
 
 func isRetryableHTTPStatus(status int) bool {
@@ -485,6 +568,14 @@ func logHTTPRetry(req *http.Request, nextAttempt, attempts int, delay time.Durat
 	fmt.Fprintf(os.Stderr, "retry: %v; waiting %s before GET %s attempt %d/%d\n", err, delay, req.URL.Redacted(), nextAttempt, attempts)
 }
 
+func cloneURLValues(values url.Values) url.Values {
+	out := url.Values{}
+	for k, vals := range values {
+		out[k] = append([]string(nil), vals...)
+	}
+	return out
+}
+
 type crawlOptions struct {
 	LanguageWhitelist   map[string]bool
 	IncludePhrases      bool
@@ -520,7 +611,11 @@ func crawlWordPages(client *http.Client, opts crawlOptions) ([]csvRow, int, int,
 	}
 
 	if strings.TrimSpace(opts.Title) != "" {
-		page, err := fetchPage(client, strings.TrimSpace(opts.Title), true)
+		title := strings.TrimSpace(opts.Title)
+		if !isRussianAlphabetPageTitle(title) {
+			return rows, skipped + 1, filtered, 1, nil
+		}
+		page, err := fetchPage(client, title, true)
 		if err != nil {
 			return nil, skipped, filtered, inspected, err
 		}
@@ -553,6 +648,15 @@ func crawlWordPages(client *http.Client, opts crawlOptions) ([]csvRow, int, int,
 			}
 			inspected++
 			lastInspectedTitle = page.Title
+			if !isRussianAlphabetPageTitle(page.Title) {
+				skipped++
+				maybeLogProgress(page.Title)
+				continue
+			}
+			page, err := fetchPage(client, page.Title, true)
+			if err != nil {
+				return nil, skipped, filtered, inspected, err
+			}
 			row, ok, wasFiltered := rowFromWordPage(page, opts)
 			if wasFiltered {
 				filtered++
@@ -604,26 +708,12 @@ func fetchAllPagesBatch(client *http.Client, limit int, cont map[string]string) 
 	values.Set("gapnamespace", "0")
 	values.Set("gapfilterredir", "nonredirects")
 	values.Set("gaplimit", fmt.Sprintf("%d", limit))
-	values.Set("prop", "revisions|categories")
-	values.Set("rvprop", "content")
-	values.Set("rvslots", "main")
-	values.Set("cllimit", "max")
 	for k, v := range cont {
 		values.Set(k, v)
 	}
 
-	req, err := newAPIRequest(values)
+	parsed, err := doAPIQuery(client, values)
 	if err != nil {
-		return nil, nil, err
-	}
-	resp, err := doAPIRequest(client, req)
-	if err != nil {
-		return nil, nil, err
-	}
-	defer resp.Body.Close()
-
-	var parsed wikiResponse
-	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
 		return nil, nil, err
 	}
 	return parsed.Query.Pages, parsed.Continue, nil
@@ -1335,6 +1425,30 @@ func hasRussianLetter(s string) bool {
 		}
 	}
 	return false
+}
+
+func isRussianAlphabetPageTitle(title string) bool {
+	title = strings.TrimSpace(title)
+	if title == "" {
+		return false
+	}
+	for _, r := range title {
+		if !isRussianAlphabetLetter(r) {
+			return false
+		}
+	}
+	return true
+}
+
+func isRussianAlphabetLetter(r rune) bool {
+	switch unicode.ToLower(r) {
+	case 'а', 'б', 'в', 'г', 'д', 'е', 'ё', 'ж', 'з', 'и', 'й',
+		'к', 'л', 'м', 'н', 'о', 'п', 'р', 'с', 'т', 'у', 'ф',
+		'х', 'ц', 'ч', 'ш', 'щ', 'ъ', 'ы', 'ь', 'э', 'ю', 'я':
+		return true
+	default:
+		return false
+	}
 }
 
 func inferMode(cyr string) string {
