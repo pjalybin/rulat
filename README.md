@@ -22,8 +22,10 @@ go run . -dict loan_stems.csv < input.txt > output.txt
 With visible apostrophes between preserved loan stems and converted Russian suffixes:
 
 ```bash
-go run . -dict loan_stems.csv -apostrophe < input.txt > output.txt
+go run . -dict loan_stems.csv -loan-apostrophe < input.txt > output.txt
 ```
+
+`-apostrophe` is kept as a shorter alias for `-loan-apostrophe`.
 
 Run tests:
 
@@ -41,10 +43,12 @@ go build -o rulat .
 ## Project files
 
 ```text
-rulat.go          Go CLI converter
-loan_stems.csv    starter loanword/name stem dictionary
-rulat_test.go     regression tests for native rules and dictionary behavior
-README.md         this developer summary
+rulat.go                         Go CLI converter
+loan_stems.csv                   starter loanword/name stem dictionary
+loan_stems.wiktionary.csv        generated Wiktionary loanword candidates
+tools/crawl_wiktionary_loans.go  Wiktionary word-page crawler
+rulat_test.go                    regression tests for native rules and dictionary behavior
+README.md                        this developer summary
 ```
 
 ## Current native orthography
@@ -337,7 +341,7 @@ maestrom   / maestro'm
 Header:
 
 ```csv
-cyrillic_stem,latin_stem,mode,case_mode,source,notes,suffix_context
+cyrillic_stem,latin_stem,original_latin,original_greek,mode,case_mode,source,notes,suffix_context,url
 ```
 
 Columns:
@@ -345,11 +349,14 @@ Columns:
 ```text
 cyrillic_stem   Cyrillic stem or full word to match.
 latin_stem      Latin spelling to output.
+original_latin  Optional Latin source spelling or Greek transliteration before stem normalization.
+original_greek  Optional Greek source spelling before transliteration.
 mode            stem or word. Default: stem.
 case_mode       auto or preserve. Default: auto.
 source          Optional source-language note.
 notes           Optional free-text note.
 suffix_context  Optional override for how suffixes attach.
+url             Optional source URL for dictionary provenance.
 ```
 
 `suffix_context` values:
@@ -368,8 +375,8 @@ j        suffix follows й/jotation context
 Useful example:
 
 ```csv
-жюль,Jule,word,auto,French,name from Jules,
-жюл,Jule,stem,auto,French,name stem from Jules,soft
+жюль,Jule,Jules,,word,auto,French,name from Jules,,
+жюл,Jule,Jules,,stem,auto,French,name stem from Jules,soft,
 ```
 
 This lets the converter produce:
@@ -380,6 +387,81 @@ This lets the converter produce:
 ```
 
 without treating the Russian suffix as if it followed a hard native consonant.
+
+### Crawling Wiktionary loanword candidates
+
+The curated `loan_stems.csv` is still the hand-reviewed dictionary. The crawler
+builds a separate candidate file from Russian Wiktionary word pages:
+
+```bash
+GO111MODULE=off go run ./tools -out loan_stems.wiktionary.csv
+```
+
+The default `-source pages` mode walks main-namespace pages through MediaWiki's
+API, extracts the Russian section, reads `=== Этимология ===`, resolves
+`{{этимология:...}}` templates, parses `{{lang|...}}`/`{{lang2|...}}` source
+forms, filters by source language, and writes the source word page into the
+`url` column. Generated rows keep Latin source spelling in `original_latin`,
+and Greek source spelling in `original_greek` while using Wiktionary-style
+Ancient Greek transliteration to generate `latin_stem`:
+<https://en.wiktionary.org/wiki/Wiktionary:Ancient_Greek_transliteration>.
+Generated `latin_stem` values remove Latin diacritics and drop final Latin
+vowels when the Russian stem ends in a consonant, so `альков` from French
+`alcôve` becomes `latin_stem=alcov,original_latin=alcôve`.
+For Greek-script etymologies, basic Ancient Greek declensional stemming is
+applied before transliteration: `εὐαγγέλιον` becomes
+`latin_stem=evangeli,original_latin=evangeli,original_greek=εὐαγγέλιον`.
+The `-ιον` family stems to `-ι`, so `εὐαγγέλιον`, `εὐαγγελίου`,
+`εὐαγγελίῳ`, and `εὐαγγέλιᾰ` all produce `evangeli`. Common endings such as
+`-ος`, `-ον`, `-ης`, `-ας`, `-ις`, `-υς`, and `-ους` lose the final case
+consonant. Russian loan stems use the nominative loan shape for common Greek
+neuters, so `πρόβλημα` becomes `problem`, not `problemat`; `-εύς` loses the
+whole ending for names such as `Ἀχιλλεύς -> Achill`, while `-ων` stays intact
+as in `Ἀπόλλων -> Apollon`. Final `ξ` and `ψ` recover basic velar/labial stems
+as `κ` and `π`.
+Greek diphthongs with upsilon use consonant `v`: `αυ -> av`,
+`ευ -> ev`, `ηυ -> ēv`, `ου -> ov`, `υι -> vi`, `ωυ -> ōv`.
+
+The Greek romanizer can also be run by itself. It writes CSV with both the
+diacritic-preserving Latin form and a plain Latin form:
+
+```bash
+GO111MODULE=off go run -tags greektranslit ./tools εὐαγγέλιον Ἀπόλλων
+GO111MODULE=off go run -tags greektranslit ./tools -stem εὐαγγέλιον
+```
+
+By default it only keeps candidates from this source-language whitelist:
+
+```text
+English, German, French, Italian, Greek, Latin, Dutch, Hebrew, Swedish, Danish, Spanish
+```
+
+Use `-languages English,French,Latin` to choose a narrower set, or
+`-languages ''` to disable language filtering. The generated rows are candidates
+and should be reviewed before merging into the curated dictionary.
+
+For a slower run that adds page-category metadata and incomplete-etymology
+markers to generated notes:
+
+```bash
+GO111MODULE=off go run ./tools -enrich-pages -out loan_stems.wiktionary.csv
+```
+
+The older appendix/prose parser is still available for comparison:
+
+```bash
+GO111MODULE=off go run ./tools -source appendix -out loan_stems.wiktionary.csv
+```
+
+Useful page-mode development commands:
+
+```bash
+GO111MODULE=off go run ./tools -title альков -languages French -out /tmp/alcov.csv
+GO111MODULE=off go run ./tools -from альков -page-limit 100 -limit 20 -progress-every 50
+```
+
+`-progress-every N` logs page-mode counters to stderr after each `N` inspected
+pages. The default is `0`, which disables progress logs.
 
 ## Dictionary matching behavior
 

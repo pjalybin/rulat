@@ -29,17 +29,21 @@ type dictEntry struct {
 	CyrStem       string
 	CyrRunes      []rune
 	Latin         string
+	OriginalLatin string
+	OriginalGreek string
 	Mode          string // stem or word
 	CaseMode      string // auto or preserve
 	Source        string
 	Notes         string
+	URL           string
 	SuffixKind    prevKind
 	HasSuffixKind bool
 }
 
 func main() {
 	dictPath := flag.String("dict", "", "CSV dictionary of loanword stems")
-	apostrophe := flag.Bool("apostrophe", false, "insert apostrophe between dictionary loan stem and converted Russian suffix")
+	loanApostrophe := flag.Bool("loan-apostrophe", false, "insert apostrophe between dictionary loan stem and converted Russian suffix")
+	apostrophe := flag.Bool("apostrophe", false, "alias for -loan-apostrophe")
 	flag.Parse()
 
 	var entries []dictEntry
@@ -58,7 +62,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	fmt.Print(Transliterate(string(input), entries, *apostrophe))
+	fmt.Print(Transliterate(string(input), entries, *loanApostrophe || *apostrophe))
 }
 
 func loadDictionary(path string) ([]dictEntry, error) {
@@ -127,13 +131,16 @@ func loadDictionary(path string) ([]dictEntry, error) {
 		}
 		lowerStem := strings.ToLower(stem)
 		entry := dictEntry{
-			CyrStem:  lowerStem,
-			CyrRunes: []rune(lowerStem),
-			Latin:    latin,
-			Mode:     mode,
-			CaseMode: caseMode,
-			Source:   get(rec, "source", ""),
-			Notes:    get(rec, "notes", ""),
+			CyrStem:       lowerStem,
+			CyrRunes:      []rune(lowerStem),
+			Latin:         latin,
+			OriginalLatin: get(rec, "original_latin", ""),
+			OriginalGreek: get(rec, "original_greek", ""),
+			Mode:          mode,
+			CaseMode:      caseMode,
+			Source:        get(rec, "source", ""),
+			Notes:         get(rec, "notes", ""),
+			URL:           get(rec, "url", ""),
 		}
 		if sk, ok := parseSuffixContext(get(rec, "suffix_context", "native")); ok {
 			entry.SuffixKind = sk
