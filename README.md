@@ -341,7 +341,7 @@ maestrom   / maestro'm
 Header:
 
 ```csv
-cyrillic_stem,latin_stem,original_latin,original_greek,mode,case_mode,source,notes,suffix_context,url
+cyrillic_stem,latin_stem,matched_russian_reading,original_latin,original_greek,mode,case_mode,source,notes,suffix_context,url
 ```
 
 Columns:
@@ -349,6 +349,8 @@ Columns:
 ```text
 cyrillic_stem   Cyrillic stem or full word to match.
 latin_stem      Latin spelling to output.
+matched_russian_reading
+                Matched normalized Russian reading variant accepted by the crawler's source-reading matcher; compact, no token spaces.
 original_latin  Optional Latin source spelling or Greek transliteration before stem normalization.
 original_greek  Optional Greek source spelling before transliteration.
 mode            stem or word. Default: stem.
@@ -375,8 +377,8 @@ j        suffix follows й/jotation context
 Useful example:
 
 ```csv
-жюль,Jule,Jules,,word,auto,French,name from Jules,,
-жюл,Jule,Jules,,stem,auto,French,name stem from Jules,soft,
+жюль,Jule,,Jules,,word,auto,French,name from Jules,,
+жюл,Jule,,Jules,,stem,auto,French,name stem from Jules,soft,
 ```
 
 This lets the converter produce:
@@ -394,8 +396,16 @@ The curated `loan_stems.csv` is still the hand-reviewed dictionary. The crawler
 builds a separate candidate file from Russian Wiktionary word pages:
 
 ```bash
-GO111MODULE=off go run ./tools -out loan_stems.wiktionary.csv
+GO111MODULE=off go run ./tools
 ```
+
+When `-out` is omitted, the crawler writes to a generated filename based on
+content-affecting flags. The default page crawl writes
+`loan_stems.wiktionary.pages.csv`; for example,
+`-from ф -limit 100` writes
+`loan_stems.wiktionary.pages.from-ф.limit-100.csv`. The resolved output path is
+printed before crawling starts. In page mode, each accepted row is written
+immediately; every CSV record is flushed and synced after it is written.
 
 The default `-source pages` mode walks main-namespace pages through MediaWiki's
 API, extracts the Russian section, reads `=== Этимология ===`, resolves
@@ -406,6 +416,28 @@ and Greek source spelling in `original_greek` while using a loanword-oriented
 Greek-to-Latin stem conversion for `latin_stem`. Page mode lists titles first
 and only loads word pages whose titles consist exclusively of Russian alphabet
 letters, case-insensitively.
+If no etymology candidates are found, the crawler falls back to `Перевод` /
+`Список переводов` sections and reads translation templates such as
+`{{перев|el|Αχιλλέας}}`. Translation fallback is intentionally narrower than
+etymology parsing: `-translation-languages` defaults to `Greek`; pass a
+comma-separated list such as `-translation-languages Greek,English`, or an
+empty value for all translation languages.
+Rows are accepted only for noun/name pages. The crawler reads the morphology
+area before etymology, prefers declension/morphology stem templates when they
+are present, concatenates positional Russian morphemes such as
+`{{морфо-ru|авто|мир|+∅}}` into `автомир`, and skips
+adjective/verb/adverb pages. It then trims the
+candidate source form to the shortest prefix whose possible sound readings
+match the Russian loan stem; if no such prefix exists, the word is skipped.
+Source forms are read longest cluster first, then by single letters.
+For example, source `x` can read as Russian `х`, `кс`, or `з`; `ch` as `х`,
+`ч`, `ш`, or `к`; `zh` as `ж`; `sch` as `ш`, `с`, or `ж`; `qu`/`cu` as
+`кв`, `к`, or `ку`; `sc` as `ск`, `ш`, or `щ`; `b` as `б` or `в`; `g` as
+`г`, `ж`, or `дж`; and `h` as `х`, `к`, `г`, or silent. Vowel clusters are
+normalized too, including `eau -> о`, `ou -> у/оу/ау/о`, `ui -> уи/и/эй/ау`,
+`oe -> е/ое/у`, and `yo -> е/йо`. Russian target spelling is normalized to a
+single canonical variant: `ё -> е`, `э -> е`, `ы -> и`, `ю -> у`, `я -> а`,
+and `ь/ъ` are ignored.
 Generated `latin_stem` values remove Latin diacritics and drop final Latin
 vowels when the Russian stem ends in a consonant, so `альков` from French
 `alcôve` becomes `latin_stem=alcov,original_latin=alcôve`.
@@ -449,13 +481,13 @@ For a slower run that adds page-category metadata and incomplete-etymology
 markers to generated notes:
 
 ```bash
-GO111MODULE=off go run ./tools -enrich-pages -out loan_stems.wiktionary.csv
+GO111MODULE=off go run ./tools -enrich-pages
 ```
 
 The older appendix/prose parser is still available for comparison:
 
 ```bash
-GO111MODULE=off go run ./tools -source appendix -out loan_stems.wiktionary.csv
+GO111MODULE=off go run ./tools -source appendix
 ```
 
 Useful page-mode development commands:
@@ -478,6 +510,13 @@ transport errors and MediaWiki `maxlag` responses. `-http-retries` controls the
 retry budget and defaults to `5`; `-http-retry-delay` controls the initial
 exponential backoff delay and defaults to `5s`. `Retry-After` is honored when
 the server sends it.
+
+Downloaded Wiktionary API responses are cached by default in `.cache`.
+Cache files are named with the SHA-256 hash of the full request URL, and the
+first line stores the original URL so a hash collision is treated as a cache
+miss and redownloaded. Cache freshness is based on `now - file modified time`;
+`-cache-ttl` defaults to `720h` (30 days), and `-cache-ttl 0` always
+revalidates. Use `-cache-dir ''` to disable the API cache.
 
 ## Dictionary matching behavior
 
