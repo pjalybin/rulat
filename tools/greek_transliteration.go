@@ -7,17 +7,35 @@ import (
 )
 
 type greekToken struct {
-	base      rune
-	text      string
-	start     int
-	end       int
-	upper     bool
-	rough     bool
-	diaeresis bool
-	subscript bool
-	long      bool
-	short     bool
-	letter    bool
+	base       rune
+	text       string
+	start      int
+	end        int
+	upper      bool
+	rough      bool
+	acute      bool
+	grave      bool
+	circumflex bool
+	diaeresis  bool
+	subscript  bool
+	long       bool
+	short      bool
+	letter     bool
+}
+
+type greekDiphthongMode int
+
+const (
+	greekDiphthongsAncient greekDiphthongMode = iota
+	greekDiphthongsLoan
+)
+
+type greekTransliterationOptions struct {
+	diphthongs        greekDiphthongMode
+	accents           bool
+	lengthMarks       bool
+	defaultShortMarks bool
+	chi               string
 }
 
 func normalizeGreekCandidate(s string) string {
@@ -133,6 +151,24 @@ func replaceGreekEnding(s string, tokens []greekToken, letterIndexes []int, lett
 }
 
 func transliterateGreek(s string) (string, bool) {
+	return transliterateGreekWithOptions(s, greekTransliterationOptions{
+		diphthongs:  greekDiphthongsLoan,
+		lengthMarks: true,
+		chi:         "ch",
+	})
+}
+
+func romanizeGreekAncient(s string, keepDiacritics bool) (string, bool) {
+	return transliterateGreekWithOptions(s, greekTransliterationOptions{
+		diphthongs:        greekDiphthongsAncient,
+		accents:           keepDiacritics,
+		lengthMarks:       keepDiacritics,
+		defaultShortMarks: keepDiacritics,
+		chi:               "kh",
+	})
+}
+
+func transliterateGreekWithOptions(s string, opts greekTransliterationOptions) (string, bool) {
 	tokens := greekTokens(s)
 	hasGreek := false
 	var out strings.Builder
@@ -150,7 +186,7 @@ func transliterateGreek(s string) (string, bool) {
 		hasGreek = true
 
 		if next, ok := nextGreekToken(tokens, i+1); ok && formsGreekDiphthong(t, next.greekToken) {
-			out.WriteString(transliterateGreekDiphthong(t, next.greekToken, wordStart))
+			out.WriteString(transliterateGreekDiphthong(t, next.greekToken, wordStart, opts))
 			i = next.index
 			wordStart = false
 			prevGreek = next.base
@@ -164,7 +200,7 @@ func transliterateGreek(s string) (string, bool) {
 			continue
 		}
 
-		out.WriteString(transliterateGreekSingle(t, wordStart, prevGreek))
+		out.WriteString(transliterateGreekSingle(t, wordStart, prevGreek, opts))
 		wordStart = false
 		prevGreek = t.base
 	}
@@ -191,6 +227,18 @@ func greekTokens(s string) []greekToken {
 		if len(tokens) > 0 {
 			last := &tokens[len(tokens)-1]
 			switch r {
+			case '\u0301', '\u0341':
+				last.acute = true
+				last.end = end
+				continue
+			case '\u0300', '\u0340':
+				last.grave = true
+				last.end = end
+				continue
+			case '\u0342', '\u0302':
+				last.circumflex = true
+				last.end = end
+				continue
 			case '\u0314':
 				last.rough = true
 				last.end = end
@@ -233,67 +281,106 @@ func greekRuneToken(r rune) (greekToken, bool) {
 	case r >= 0x1F00 && r <= 0x1F0F:
 		t.base = 'α'
 		t.upper = r >= 0x1F08
-		t.rough = r%2 == 1
+		setGreekBreathingAccent(&t, int(r-0x1F00))
 		return t, true
 	case r >= 0x1F10 && r <= 0x1F1F:
 		t.base = 'ε'
 		t.upper = r >= 0x1F18
-		t.rough = r%2 == 1
+		setGreekBreathingAccent(&t, int(r-0x1F10))
 		return t, true
 	case r >= 0x1F20 && r <= 0x1F2F:
 		t.base = 'η'
 		t.upper = r >= 0x1F28
-		t.rough = r%2 == 1
+		setGreekBreathingAccent(&t, int(r-0x1F20))
 		return t, true
 	case r >= 0x1F30 && r <= 0x1F3F:
 		t.base = 'ι'
 		t.upper = r >= 0x1F38
-		t.rough = r%2 == 1
+		setGreekBreathingAccent(&t, int(r-0x1F30))
 		return t, true
 	case r >= 0x1F40 && r <= 0x1F4F:
 		t.base = 'ο'
 		t.upper = r >= 0x1F48
-		t.rough = r%2 == 1
+		setGreekBreathingAccent(&t, int(r-0x1F40))
 		return t, true
 	case r >= 0x1F50 && r <= 0x1F5F:
 		t.base = 'υ'
 		t.upper = r >= 0x1F58
-		t.rough = r%2 == 1
+		setGreekBreathingAccent(&t, int(r-0x1F50))
 		return t, true
 	case r >= 0x1F60 && r <= 0x1F6F:
 		t.base = 'ω'
 		t.upper = r >= 0x1F68
-		t.rough = r%2 == 1
+		setGreekBreathingAccent(&t, int(r-0x1F60))
 		return t, true
 	case r >= 0x1F80 && r <= 0x1F8F:
 		t.base = 'α'
 		t.upper = r >= 0x1F88
-		t.rough = r%2 == 1
+		setGreekBreathingAccent(&t, int(r-0x1F80))
 		t.subscript = true
 		return t, true
 	case r >= 0x1F90 && r <= 0x1F9F:
 		t.base = 'η'
 		t.upper = r >= 0x1F98
-		t.rough = r%2 == 1
+		setGreekBreathingAccent(&t, int(r-0x1F90))
 		t.subscript = true
 		return t, true
 	case r >= 0x1FA0 && r <= 0x1FAF:
 		t.base = 'ω'
 		t.upper = r >= 0x1FA8
-		t.rough = r%2 == 1
+		setGreekBreathingAccent(&t, int(r-0x1FA0))
 		t.subscript = true
 		return t, true
 	}
 
 	switch r {
-	case 'α', 'ά', 'ὰ', 'ᾶ', 'ᾰ', 'ᾱ':
+	case 'α':
 		t.base = 'α'
-	case 'Α', 'Ά', 'Ὰ', 'Ᾱ', 'Ᾰ':
+	case 'ά':
+		t.base = 'α'
+		t.acute = true
+	case 'ὰ':
+		t.base = 'α'
+		t.grave = true
+	case 'ᾶ':
+		t.base = 'α'
+		t.circumflex = true
+	case 'ᾰ':
+		t.base = 'α'
+		t.short = true
+	case 'ᾱ':
+		t.base = 'α'
+		t.long = true
+	case 'Α':
 		t.base = 'α'
 		t.upper = true
+	case 'Ά':
+		t.base = 'α'
+		t.upper = true
+		t.acute = true
+	case 'Ὰ':
+		t.base = 'α'
+		t.upper = true
+		t.grave = true
+	case 'Ᾱ':
+		t.base = 'α'
+		t.upper = true
+		t.long = true
+	case 'Ᾰ':
+		t.base = 'α'
+		t.upper = true
+		t.short = true
 	case 'ᾳ', 'ᾴ', 'ᾲ', 'ᾷ':
 		t.base = 'α'
 		t.subscript = true
+		switch r {
+		case 'ᾴ':
+			t.acute = true
+		case 'ᾲ':
+			t.grave = true
+		case 'ᾷ':
+			t.circumflex = true
+		}
 	case 'ᾼ':
 		t.base = 'α'
 		t.upper = true
@@ -313,24 +400,63 @@ func greekRuneToken(r rune) (greekToken, bool) {
 	case 'Δ':
 		t.base = 'δ'
 		t.upper = true
-	case 'ε', 'έ', 'ὲ':
+	case 'ε':
 		t.base = 'ε'
-	case 'Ε', 'Έ', 'Ὲ':
+	case 'έ':
+		t.base = 'ε'
+		t.acute = true
+	case 'ὲ':
+		t.base = 'ε'
+		t.grave = true
+	case 'Ε':
 		t.base = 'ε'
 		t.upper = true
+	case 'Έ':
+		t.base = 'ε'
+		t.upper = true
+		t.acute = true
+	case 'Ὲ':
+		t.base = 'ε'
+		t.upper = true
+		t.grave = true
 	case 'ζ':
 		t.base = 'ζ'
 	case 'Ζ':
 		t.base = 'ζ'
 		t.upper = true
-	case 'η', 'ή', 'ὴ', 'ῆ':
+	case 'η':
 		t.base = 'η'
-	case 'Η', 'Ή', 'Ὴ':
+	case 'ή':
+		t.base = 'η'
+		t.acute = true
+	case 'ὴ':
+		t.base = 'η'
+		t.grave = true
+	case 'ῆ':
+		t.base = 'η'
+		t.circumflex = true
+	case 'Η':
 		t.base = 'η'
 		t.upper = true
+	case 'Ή':
+		t.base = 'η'
+		t.upper = true
+		t.acute = true
+	case 'Ὴ':
+		t.base = 'η'
+		t.upper = true
+		t.grave = true
 	case 'ῃ', 'ῄ', 'ῂ', 'ῇ':
 		t.base = 'η'
 		t.subscript = true
+		switch r {
+		case 'ῄ':
+			t.acute = true
+		case 'ῂ':
+			t.grave = true
+		case 'ῇ':
+			t.circumflex = true
+		}
 	case 'ῌ':
 		t.base = 'η'
 		t.upper = true
@@ -340,14 +466,53 @@ func greekRuneToken(r rune) (greekToken, bool) {
 	case 'Θ':
 		t.base = 'θ'
 		t.upper = true
-	case 'ι', 'ί', 'ὶ', 'ῖ', 'ῐ', 'ῑ':
+	case 'ι':
 		t.base = 'ι'
-	case 'Ι', 'Ί', 'Ὶ', 'Ῑ', 'Ῐ':
+	case 'ί':
+		t.base = 'ι'
+		t.acute = true
+	case 'ὶ':
+		t.base = 'ι'
+		t.grave = true
+	case 'ῖ':
+		t.base = 'ι'
+		t.circumflex = true
+	case 'ῐ':
+		t.base = 'ι'
+		t.short = true
+	case 'ῑ':
+		t.base = 'ι'
+		t.long = true
+	case 'Ι':
 		t.base = 'ι'
 		t.upper = true
+	case 'Ί':
+		t.base = 'ι'
+		t.upper = true
+		t.acute = true
+	case 'Ὶ':
+		t.base = 'ι'
+		t.upper = true
+		t.grave = true
+	case 'Ῑ':
+		t.base = 'ι'
+		t.upper = true
+		t.long = true
+	case 'Ῐ':
+		t.base = 'ι'
+		t.upper = true
+		t.short = true
 	case 'ϊ', 'ΐ', 'ῒ', 'ῗ':
 		t.base = 'ι'
 		t.diaeresis = true
+		switch r {
+		case 'ΐ':
+			t.acute = true
+		case 'ῒ':
+			t.grave = true
+		case 'ῗ':
+			t.circumflex = true
+		}
 	case 'Ϊ':
 		t.base = 'ι'
 		t.upper = true
@@ -377,11 +542,25 @@ func greekRuneToken(r rune) (greekToken, bool) {
 	case 'Ξ':
 		t.base = 'ξ'
 		t.upper = true
-	case 'ο', 'ό', 'ὸ':
+	case 'ο':
 		t.base = 'ο'
-	case 'Ο', 'Ό', 'Ὸ':
+	case 'ό':
+		t.base = 'ο'
+		t.acute = true
+	case 'ὸ':
+		t.base = 'ο'
+		t.grave = true
+	case 'Ο':
 		t.base = 'ο'
 		t.upper = true
+	case 'Ό':
+		t.base = 'ο'
+		t.upper = true
+		t.acute = true
+	case 'Ὸ':
+		t.base = 'ο'
+		t.upper = true
+		t.grave = true
 	case 'π':
 		t.base = 'π'
 	case 'Π':
@@ -409,14 +588,53 @@ func greekRuneToken(r rune) (greekToken, bool) {
 	case 'Τ':
 		t.base = 'τ'
 		t.upper = true
-	case 'υ', 'ύ', 'ὺ', 'ῦ', 'ῠ', 'ῡ':
+	case 'υ':
 		t.base = 'υ'
-	case 'Υ', 'Ύ', 'Ὺ', 'Ῡ', 'Ῠ':
+	case 'ύ':
+		t.base = 'υ'
+		t.acute = true
+	case 'ὺ':
+		t.base = 'υ'
+		t.grave = true
+	case 'ῦ':
+		t.base = 'υ'
+		t.circumflex = true
+	case 'ῠ':
+		t.base = 'υ'
+		t.short = true
+	case 'ῡ':
+		t.base = 'υ'
+		t.long = true
+	case 'Υ':
 		t.base = 'υ'
 		t.upper = true
+	case 'Ύ':
+		t.base = 'υ'
+		t.upper = true
+		t.acute = true
+	case 'Ὺ':
+		t.base = 'υ'
+		t.upper = true
+		t.grave = true
+	case 'Ῡ':
+		t.base = 'υ'
+		t.upper = true
+		t.long = true
+	case 'Ῠ':
+		t.base = 'υ'
+		t.upper = true
+		t.short = true
 	case 'ϋ', 'ΰ', 'ῢ', 'ῧ':
 		t.base = 'υ'
 		t.diaeresis = true
+		switch r {
+		case 'ΰ':
+			t.acute = true
+		case 'ῢ':
+			t.grave = true
+		case 'ῧ':
+			t.circumflex = true
+		}
 	case 'Ϋ':
 		t.base = 'υ'
 		t.upper = true
@@ -436,14 +654,39 @@ func greekRuneToken(r rune) (greekToken, bool) {
 	case 'Ψ':
 		t.base = 'ψ'
 		t.upper = true
-	case 'ω', 'ώ', 'ὼ', 'ῶ':
+	case 'ω':
 		t.base = 'ω'
-	case 'Ω', 'Ώ', 'Ὼ':
+	case 'ώ':
+		t.base = 'ω'
+		t.acute = true
+	case 'ὼ':
+		t.base = 'ω'
+		t.grave = true
+	case 'ῶ':
+		t.base = 'ω'
+		t.circumflex = true
+	case 'Ω':
 		t.base = 'ω'
 		t.upper = true
+	case 'Ώ':
+		t.base = 'ω'
+		t.upper = true
+		t.acute = true
+	case 'Ὼ':
+		t.base = 'ω'
+		t.upper = true
+		t.grave = true
 	case 'ῳ', 'ῴ', 'ῲ', 'ῷ':
 		t.base = 'ω'
 		t.subscript = true
+		switch r {
+		case 'ῴ':
+			t.acute = true
+		case 'ῲ':
+			t.grave = true
+		case 'ῷ':
+			t.circumflex = true
+		}
 	case 'ῼ':
 		t.base = 'ω'
 		t.upper = true
@@ -462,6 +705,19 @@ func greekRuneToken(r rune) (greekToken, bool) {
 		t.short = true
 	}
 	return t, true
+}
+
+func setGreekBreathingAccent(t *greekToken, offset int) {
+	marks := offset % 8
+	t.rough = marks%2 == 1
+	switch marks {
+	case 2, 3:
+		t.grave = true
+	case 4, 5:
+		t.acute = true
+	case 6, 7:
+		t.circumflex = true
+	}
 }
 
 func formsGreekDiphthong(a, b greekToken) bool {
@@ -486,29 +742,68 @@ func formsGreekDiphthong(a, b greekToken) bool {
 	}
 }
 
-func transliterateGreekDiphthong(a, b greekToken, wordStart bool) string {
+func transliterateGreekDiphthong(a, b greekToken, wordStart bool, opts greekTransliterationOptions) string {
 	digraph := ""
-	switch {
-	case a.base == 'α' && b.base == 'ι':
-		digraph = "ai"
-	case a.base == 'α' && b.base == 'υ':
-		digraph = "av"
-	case a.base == 'ε' && b.base == 'ι':
-		digraph = "ei"
-	case a.base == 'ε' && b.base == 'υ':
-		digraph = "ev"
-	case a.base == 'η' && b.base == 'υ':
-		digraph = "ēv"
-	case a.base == 'ο' && b.base == 'ι':
-		digraph = "oi"
-	case a.base == 'ο' && b.base == 'υ':
-		digraph = "ov"
-	case a.base == 'υ' && b.base == 'ι':
-		digraph = "vi"
-	case a.base == 'ω' && b.base == 'υ':
-		digraph = "ōv"
+	switch opts.diphthongs {
+	case greekDiphthongsLoan:
+		switch {
+		case a.base == 'α' && b.base == 'ι':
+			digraph = "ai"
+		case a.base == 'α' && b.base == 'υ':
+			digraph = "av"
+		case a.base == 'ε' && b.base == 'ι':
+			digraph = "ei"
+		case a.base == 'ε' && b.base == 'υ':
+			digraph = "ev"
+		case a.base == 'η' && b.base == 'υ':
+			digraph = "ev"
+		case a.base == 'ο' && b.base == 'ι':
+			digraph = "oi"
+		case a.base == 'ο' && b.base == 'υ':
+			digraph = "u"
+		case a.base == 'υ' && b.base == 'ι':
+			digraph = "yi"
+		case a.base == 'ω' && b.base == 'υ':
+			digraph = "ov"
+		}
+	default:
+		switch {
+		case a.base == 'α' && b.base == 'ι':
+			digraph = greekAlphaLatin(a, opts) + "i"
+		case a.base == 'α' && b.base == 'υ':
+			digraph = greekAlphaLatin(a, opts) + "u"
+		case a.base == 'ε' && b.base == 'ι':
+			digraph = "ei"
+		case a.base == 'ε' && b.base == 'υ':
+			digraph = "eu"
+		case a.base == 'η' && b.base == 'υ':
+			if opts.lengthMarks {
+				digraph = "ēu"
+			} else {
+				digraph = "eu"
+			}
+		case a.base == 'ο' && b.base == 'ι':
+			digraph = "oi"
+		case a.base == 'ο' && b.base == 'υ':
+			digraph = "ou"
+		case a.base == 'υ' && b.base == 'ι':
+			digraph = "ui"
+		case a.base == 'ω' && b.base == 'υ':
+			if opts.lengthMarks {
+				digraph = "ōu"
+			} else {
+				digraph = "ou"
+			}
+		}
 	}
-	if a.rough || b.rough || (wordStart && a.base == 'υ') {
+	if opts.accents {
+		if hasGreekAccent(b) {
+			digraph = accentLastLatinVowel(digraph, b)
+		} else if hasGreekAccent(a) {
+			digraph = accentFirstLatinVowel(digraph, a)
+		}
+	}
+	if a.rough || b.rough {
 		digraph = "h" + digraph
 	}
 	return applyGreekCase(digraph, a.upper)
@@ -527,18 +822,17 @@ func hasGammaNasal(tokens []greekToken, start int) bool {
 	}
 }
 
-func transliterateGreekSingle(t greekToken, wordStart bool, prevGreek rune) string {
+func transliterateGreekSingle(t greekToken, wordStart bool, prevGreek rune, opts greekTransliterationOptions) string {
 	out := ""
 	switch t.base {
 	case 'α':
-		out = "a"
-		if t.long || t.subscript {
-			out = "ā"
-		} else if t.short {
-			out = "ă"
-		}
+		out = greekAlphaLatin(t, opts)
 		if t.subscript {
-			out += "i"
+			if opts.diphthongs == greekDiphthongsLoan {
+				out = "ai"
+			} else {
+				out += "i"
+			}
 		}
 	case 'β':
 		out = "b"
@@ -551,19 +845,27 @@ func transliterateGreekSingle(t greekToken, wordStart bool, prevGreek rune) stri
 	case 'ζ':
 		out = "z"
 	case 'η':
-		out = "ē"
+		if opts.lengthMarks {
+			out = "ē"
+		} else {
+			out = "e"
+		}
 		if t.subscript {
-			out += "i"
+			if opts.diphthongs == greekDiphthongsLoan {
+				out = "ei"
+			} else {
+				out += "i"
+			}
 		}
 	case 'θ':
 		out = "th"
 	case 'ι':
 		out = "i"
-		if t.diaeresis {
+		if opts.lengthMarks && t.diaeresis {
 			out = "ï"
-		} else if t.long {
+		} else if opts.lengthMarks && t.long {
 			out = "ī"
-		} else if t.short {
+		} else if opts.lengthMarks && (t.short || opts.defaultShortMarks) {
 			out = "ĭ"
 		}
 	case 'κ':
@@ -591,34 +893,163 @@ func transliterateGreekSingle(t greekToken, wordStart bool, prevGreek rune) stri
 		out = "t"
 	case 'υ':
 		out = "u"
-		if t.diaeresis {
+		if opts.lengthMarks && t.diaeresis {
 			out = "ü"
-		} else if t.long {
+		} else if opts.lengthMarks && t.long {
 			out = "ū"
-		} else if t.short {
+		} else if opts.lengthMarks && (t.short || opts.defaultShortMarks) {
 			out = "ŭ"
 		}
-		if t.rough || wordStart {
+		if t.rough {
 			out = "h" + out
 		}
 	case 'φ':
 		out = "ph"
 	case 'χ':
-		out = "ch"
+		if opts.chi != "" {
+			out = opts.chi
+		} else {
+			out = "ch"
+		}
 	case 'ψ':
 		out = "ps"
 	case 'ω':
-		out = "ō"
+		if opts.lengthMarks {
+			out = "ō"
+		} else {
+			out = "o"
+		}
 		if t.subscript {
-			out += "i"
+			if opts.diphthongs == greekDiphthongsLoan {
+				out = "oi"
+			} else {
+				out += "i"
+			}
 		}
 	case 'ϝ':
 		out = "w"
+	}
+	if opts.accents && hasGreekAccent(t) {
+		out = accentFirstLatinVowel(out, t)
 	}
 	if t.rough && t.base != 'ρ' && t.base != 'υ' {
 		out = "h" + out
 	}
 	return applyGreekCase(out, t.upper)
+}
+
+func greekAlphaLatin(t greekToken, opts greekTransliterationOptions) string {
+	if !opts.lengthMarks {
+		return "a"
+	}
+	if t.long || t.subscript {
+		return "ā"
+	}
+	if t.short || opts.defaultShortMarks {
+		return "ă"
+	}
+	return "a"
+}
+
+func hasGreekAccent(t greekToken) bool {
+	return t.acute || t.grave || t.circumflex
+}
+
+func accentFirstLatinVowel(s string, t greekToken) string {
+	return accentLatinVowel(s, t, false)
+}
+
+func accentLastLatinVowel(s string, t greekToken) string {
+	return accentLatinVowel(s, t, true)
+}
+
+func accentLatinVowel(s string, t greekToken, last bool) string {
+	runes := []rune(s)
+	if last {
+		for i := len(runes) - 1; i >= 0; i-- {
+			if isLatinVowelForGreek(runes[i]) {
+				return string(runes[:i]) + accentLatinRune(runes[i], t) + string(runes[i+1:])
+			}
+		}
+		return s
+	}
+	for i, r := range runes {
+		if isLatinVowelForGreek(r) {
+			return string(runes[:i]) + accentLatinRune(r, t) + string(runes[i+1:])
+		}
+	}
+	return s
+}
+
+func isLatinVowelForGreek(r rune) bool {
+	switch r {
+	case 'a', 'e', 'i', 'o', 'u', 'y',
+		'A', 'E', 'I', 'O', 'U', 'Y',
+		'ă', 'Ă', 'ā', 'Ā', 'ĭ', 'Ĭ', 'ī', 'Ī',
+		'ŭ', 'Ŭ', 'ū', 'Ū', 'ē', 'Ē', 'ō', 'Ō',
+		'ï', 'Ï', 'ü', 'Ü':
+		return true
+	default:
+		return false
+	}
+}
+
+func accentLatinRune(r rune, t greekToken) string {
+	if t.circumflex {
+		switch r {
+		case 'a':
+			return "â"
+		case 'A':
+			return "Â"
+		case 'e':
+			return "ê"
+		case 'E':
+			return "Ê"
+		case 'i':
+			return "î"
+		case 'I':
+			return "Î"
+		case 'o':
+			return "ô"
+		case 'O':
+			return "Ô"
+		case 'u':
+			return "û"
+		case 'U':
+			return "Û"
+		}
+		return string(r) + "\u0302"
+	}
+	if t.acute || t.grave {
+		switch r {
+		case 'a':
+			return "á"
+		case 'A':
+			return "Á"
+		case 'ă':
+			return "ắ"
+		case 'Ă':
+			return "Ắ"
+		case 'e':
+			return "é"
+		case 'E':
+			return "É"
+		case 'i':
+			return "í"
+		case 'I':
+			return "Í"
+		case 'o':
+			return "ó"
+		case 'O':
+			return "Ó"
+		case 'u':
+			return "ú"
+		case 'U':
+			return "Ú"
+		}
+		return string(r) + "\u0301"
+	}
+	return string(r)
 }
 
 func applyGreekCase(s string, upper bool) string {

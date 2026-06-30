@@ -24,6 +24,9 @@ const (
 	apiURL                   = "https://ru.wiktionary.org/w/api.php"
 	defaultAppendixTitle     = "Приложение:Заимствованные слова в русском языке"
 	defaultLanguageWhitelist = "English,German,French,Italian,Greek,Latin,Dutch,Hebrew,Swedish,Danish,Spanish"
+	defaultHTTPRetries       = 5
+	defaultHTTPRetryDelay    = 2 * time.Second
+	maxHTTPRetryDelay        = 30 * time.Second
 	wiktionaryBaseURL        = "https://ru.wiktionary.org/wiki/"
 )
 
@@ -83,6 +86,12 @@ type templateResolver struct {
 	client *http.Client
 	cache  map[string][]loanCandidate
 }
+
+var (
+	httpRetries    = defaultHTTPRetries
+	httpRetryDelay = defaultHTTPRetryDelay
+	retrySleep     = time.Sleep
+)
 
 var (
 	headingRe              = regexp.MustCompile(`^==+\s*Из\s+(.+?)\s*==+\s*$`)
@@ -184,7 +193,18 @@ func main() {
 	stripStemDiacritics := flag.Bool("strip-stem-diacritics", true, "remove Latin diacritics from generated latin_stem values")
 	trimFinalStemVowels := flag.Bool("trim-final-stem-vowels", true, "drop final Latin vowels when generated stems attach to Russian consonant stems")
 	delay := flag.Duration("delay", 100*time.Millisecond, "delay between page requests when -enrich-pages is set")
+	retryAttempts := flag.Int("http-retries", defaultHTTPRetries, "retry attempts for transient HTTP failures; 0 disables retries")
+	retryBaseDelay := flag.Duration("http-retry-delay", defaultHTTPRetryDelay, "initial delay for transient HTTP retries; doubles up to 30s")
 	flag.Parse()
+
+	if *retryAttempts < 0 {
+		exitf("-http-retries must be >= 0")
+	}
+	if *retryBaseDelay < 0 {
+		exitf("-http-retry-delay must be >= 0")
+	}
+	httpRetries = *retryAttempts
+	httpRetryDelay = *retryBaseDelay
 
 	languageWhitelist, err := parseLanguageWhitelist(*languages)
 	if err != nil {
@@ -336,21 +356,15 @@ func fetchPage(client *http.Client, title string, categories bool) (wikiPage, er
 		values.Set("cllimit", "max")
 	}
 
-	req, err := http.NewRequest(http.MethodGet, apiURL+"?"+values.Encode(), nil)
+	req, err := newAPIRequest(values)
 	if err != nil {
 		return wikiPage{}, err
 	}
-	req.Header.Set("User-Agent", "rulat-wiktionary-loan-crawler/0.1 (https://ru.wiktionary.org/)")
-
-	resp, err := client.Do(req)
+	resp, err := doAPIRequest(client, req)
 	if err != nil {
 		return wikiPage{}, err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return wikiPage{}, fmt.Errorf("GET %s: %s: %s", req.URL.Redacted(), resp.Status, strings.TrimSpace(string(body)))
-	}
 
 	var parsed wikiResponse
 	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
@@ -360,6 +374,115 @@ func fetchPage(client *http.Client, title string, categories bool) (wikiPage, er
 		return wikiPage{}, errors.New("API response has no pages")
 	}
 	return parsed.Query.Pages[0], nil
+}
+
+func newAPIRequest(values url.Values) (*http.Request, error) {
+	req, err := http.NewRequest(http.MethodGet, apiURL+"?"+values.Encode(), nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", "rulat-wiktionary-loan-crawler/0.1 (https://ru.wiktionary.org/)")
+	return req, nil
+}
+
+func doAPIRequest(client *http.Client, req *http.Request) (*http.Response, error) {
+	attempts := httpRetries + 1
+	if attempts < 1 {
+		attempts = 1
+	}
+
+	var lastErr error
+	for attempt := 0; attempt < attempts; attempt++ {
+		resp, err := client.Do(req.Clone(req.Context()))
+		retryAfter := ""
+		if err == nil && resp.StatusCode == http.StatusOK {
+			return resp, nil
+		}
+		if err != nil {
+			if req.Context().Err() != nil {
+				return nil, err
+			}
+			lastErr = fmt.Errorf("GET %s: %w", req.URL.Redacted(), err)
+		} else {
+			body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+			retryAfter = resp.Header.Get("Retry-After")
+			statusErr := fmt.Errorf("GET %s: %s: %s", req.URL.Redacted(), resp.Status, strings.TrimSpace(string(body)))
+			resp.Body.Close()
+			if !isRetryableHTTPStatus(resp.StatusCode) {
+				return nil, statusErr
+			}
+			lastErr = statusErr
+		}
+
+		if attempt+1 >= attempts {
+			return nil, lastErr
+		}
+		delay := httpRetryBackoffDelay(attempt, retryAfter)
+		logHTTPRetry(req, attempt+2, attempts, delay, lastErr)
+		retrySleep(delay)
+	}
+	return nil, lastErr
+}
+
+func isRetryableHTTPStatus(status int) bool {
+	switch status {
+	case http.StatusRequestTimeout,
+		http.StatusTooManyRequests,
+		http.StatusInternalServerError,
+		http.StatusBadGateway,
+		http.StatusServiceUnavailable,
+		http.StatusGatewayTimeout:
+		return true
+	default:
+		return false
+	}
+}
+
+func httpRetryBackoffDelay(failedAttempt int, retryAfter string) time.Duration {
+	if delay, ok := parseRetryAfter(retryAfter); ok {
+		return delay
+	}
+	if httpRetryDelay <= 0 {
+		return 0
+	}
+	delay := httpRetryDelay
+	for i := 0; i < failedAttempt; i++ {
+		if delay >= maxHTTPRetryDelay/2 {
+			return maxHTTPRetryDelay
+		}
+		delay *= 2
+	}
+	if delay > maxHTTPRetryDelay {
+		return maxHTTPRetryDelay
+	}
+	return delay
+}
+
+func parseRetryAfter(value string) (time.Duration, bool) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0, false
+	}
+	if seconds, err := time.ParseDuration(value + "s"); err == nil && seconds >= 0 {
+		return seconds, true
+	}
+	t, err := http.ParseTime(value)
+	if err != nil {
+		return 0, false
+	}
+	delay := time.Until(t)
+	if delay < 0 {
+		delay = 0
+	}
+	return delay, true
+}
+
+func logHTTPRetry(req *http.Request, nextAttempt, attempts int, delay time.Duration, err error) {
+	if delay <= 0 {
+		fmt.Fprintf(os.Stderr, "retry: %v; retrying GET %s immediately (attempt %d/%d)\n", err, req.URL.Redacted(), nextAttempt, attempts)
+		return
+	}
+	fmt.Fprintf(os.Stderr, "retry: %v; waiting %s before GET %s attempt %d/%d\n", err, delay, req.URL.Redacted(), nextAttempt, attempts)
 }
 
 type crawlOptions struct {
@@ -489,21 +612,15 @@ func fetchAllPagesBatch(client *http.Client, limit int, cont map[string]string) 
 		values.Set(k, v)
 	}
 
-	req, err := http.NewRequest(http.MethodGet, apiURL+"?"+values.Encode(), nil)
+	req, err := newAPIRequest(values)
 	if err != nil {
 		return nil, nil, err
 	}
-	req.Header.Set("User-Agent", "rulat-wiktionary-loan-crawler/0.1 (https://ru.wiktionary.org/)")
-
-	resp, err := client.Do(req)
+	resp, err := doAPIRequest(client, req)
 	if err != nil {
 		return nil, nil, err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return nil, nil, fmt.Errorf("GET %s: %s: %s", req.URL.Redacted(), resp.Status, strings.TrimSpace(string(body)))
-	}
 
 	var parsed wikiResponse
 	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {

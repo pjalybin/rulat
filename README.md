@@ -402,9 +402,8 @@ API, extracts the Russian section, reads `=== Этимология ===`, resolve
 `{{этимология:...}}` templates, parses `{{lang|...}}`/`{{lang2|...}}` source
 forms, filters by source language, and writes the source word page into the
 `url` column. Generated rows keep Latin source spelling in `original_latin`,
-and Greek source spelling in `original_greek` while using Wiktionary-style
-Ancient Greek transliteration to generate `latin_stem`:
-<https://en.wiktionary.org/wiki/Wiktionary:Ancient_Greek_transliteration>.
+and Greek source spelling in `original_greek` while using a loanword-oriented
+Greek-to-Latin stem conversion for `latin_stem`.
 Generated `latin_stem` values remove Latin diacritics and drop final Latin
 vowels when the Russian stem ends in a consonant, so `альков` from French
 `alcôve` becomes `latin_stem=alcov,original_latin=alcôve`.
@@ -419,15 +418,19 @@ neuters, so `πρόβλημα` becomes `problem`, not `problemat`; `-εύς` los
 whole ending for names such as `Ἀχιλλεύς -> Achill`, while `-ων` stays intact
 as in `Ἀπόλλων -> Apollon`. Final `ξ` and `ψ` recover basic velar/labial stems
 as `κ` and `π`.
-Greek diphthongs with upsilon use consonant `v`: `αυ -> av`,
-`ευ -> ev`, `ηυ -> ēv`, `ου -> ov`, `υι -> vi`, `ωυ -> ōv`.
+Greek loan diphthongs use later phonetic values where Russian borrowing
+normally reflects Byzantine pronunciation: `ου -> u`, `αυ/ευ -> av/ev`,
+`υι -> yi`, `ηυ -> ev`, `ωυ -> ov`; iota subscripts map as `ᾳ -> ai`,
+`ῃ -> ei`, and `ῳ -> oi`.
 
-The Greek romanizer can also be run by itself. It writes CSV with both the
-diacritic-preserving Latin form and a plain Latin form:
+The Greek romanizer can also be built and run by itself. It is a text filter
+using standard Ancient Greek romanization; by default it keeps romanization
+diacritics, and `-plain` strips them:
 
 ```bash
-GO111MODULE=off go run -tags greektranslit ./tools εὐαγγέλιον Ἀπόλλων
-GO111MODULE=off go run -tags greektranslit ./tools -stem εὐαγγέλιον
+GO111MODULE=off go build -tags greektranslit -o greektranslit ./tools
+printf 'Ἄνδρα μοι ἔννεπε, Μοῦσα\n' | ./greektranslit
+printf 'Ἄνδρα μοι ἔννεπε, Μοῦσα\n' | ./greektranslit -plain
 ```
 
 By default it only keeps candidates from this source-language whitelist:
@@ -462,6 +465,12 @@ GO111MODULE=off go run ./tools -from альков -page-limit 100 -limit 20 -pro
 
 `-progress-every N` logs page-mode counters to stderr after each `N` inspected
 pages. The default is `0`, which disables progress logs.
+
+Crawler HTTP requests retry transient failures by default: `408`, `429`, `500`,
+`502`, `503`, and `504`, plus transport errors. `-http-retries` controls the
+retry budget and defaults to `5`; `-http-retry-delay` controls the initial
+exponential backoff delay and defaults to `2s`. `Retry-After` is honored when
+the server sends it.
 
 ## Dictionary matching behavior
 
