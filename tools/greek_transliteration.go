@@ -23,15 +23,15 @@ type greekToken struct {
 	letter     bool
 }
 
-type greekDiphthongMode int
+type greekRomanizationScheme int
 
 const (
-	greekDiphthongsAncient greekDiphthongMode = iota
-	greekDiphthongsLoan
+	greekRomanizationClassical greekRomanizationScheme = iota
+	greekRomanizationALALC
 )
 
 type greekTransliterationOptions struct {
-	diphthongs        greekDiphthongMode
+	scheme            greekRomanizationScheme
 	accents           bool
 	lengthMarks       bool
 	defaultShortMarks bool
@@ -151,20 +151,35 @@ func replaceGreekEnding(s string, tokens []greekToken, letterIndexes []int, lett
 }
 
 func transliterateGreek(s string) (string, bool) {
+	return romanizeGreekClassical(s)
+}
+
+func romanizeGreekClassical(s string) (string, bool) {
 	return transliterateGreekWithOptions(s, greekTransliterationOptions{
-		diphthongs:  greekDiphthongsLoan,
-		lengthMarks: true,
-		chi:         "ch",
+		scheme: greekRomanizationClassical,
+		chi:    "ch",
 	})
 }
 
 func romanizeGreekAncient(s string, keepDiacritics bool) (string, bool) {
+	return romanizeGreekALALC(s, keepDiacritics)
+}
+
+func romanizeGreekALALC(s string, keepDiacritics bool) (string, bool) {
 	return transliterateGreekWithOptions(s, greekTransliterationOptions{
-		diphthongs:        greekDiphthongsAncient,
-		accents:           keepDiacritics,
-		lengthMarks:       keepDiacritics,
-		defaultShortMarks: keepDiacritics,
-		chi:               "kh",
+		scheme:      greekRomanizationALALC,
+		lengthMarks: keepDiacritics,
+		chi:         "ch",
+	})
+}
+
+func romanizeGreekALALCRich(s string) (string, bool) {
+	return transliterateGreekWithOptions(s, greekTransliterationOptions{
+		scheme:            greekRomanizationALALC,
+		accents:           true,
+		lengthMarks:       true,
+		defaultShortMarks: true,
+		chi:               "ch",
 	})
 }
 
@@ -744,34 +759,34 @@ func formsGreekDiphthong(a, b greekToken) bool {
 
 func transliterateGreekDiphthong(a, b greekToken, wordStart bool, opts greekTransliterationOptions) string {
 	digraph := ""
-	switch opts.diphthongs {
-	case greekDiphthongsLoan:
+	switch opts.scheme {
+	case greekRomanizationClassical:
 		switch {
 		case a.base == 'α' && b.base == 'ι':
-			digraph = "ai"
+			digraph = "ae"
 		case a.base == 'α' && b.base == 'υ':
-			digraph = "av"
+			digraph = "au"
 		case a.base == 'ε' && b.base == 'ι':
-			digraph = "ei"
+			digraph = "e"
 		case a.base == 'ε' && b.base == 'υ':
-			digraph = "ev"
+			digraph = "eu"
 		case a.base == 'η' && b.base == 'υ':
-			digraph = "ev"
+			digraph = "eu"
 		case a.base == 'ο' && b.base == 'ι':
-			digraph = "oi"
+			digraph = "oe"
 		case a.base == 'ο' && b.base == 'υ':
 			digraph = "u"
 		case a.base == 'υ' && b.base == 'ι':
-			digraph = "yi"
+			digraph = "ui"
 		case a.base == 'ω' && b.base == 'υ':
-			digraph = "ov"
+			digraph = "ou"
 		}
 	default:
 		switch {
 		case a.base == 'α' && b.base == 'ι':
-			digraph = greekAlphaLatin(a, opts) + "i"
+			digraph = "ai"
 		case a.base == 'α' && b.base == 'υ':
-			digraph = greekAlphaLatin(a, opts) + "u"
+			digraph = "au"
 		case a.base == 'ε' && b.base == 'ι':
 			digraph = "ei"
 		case a.base == 'ε' && b.base == 'υ':
@@ -828,10 +843,10 @@ func transliterateGreekSingle(t greekToken, wordStart bool, prevGreek rune, opts
 	case 'α':
 		out = greekAlphaLatin(t, opts)
 		if t.subscript {
-			if opts.diphthongs == greekDiphthongsLoan {
+			if opts.scheme == greekRomanizationClassical {
 				out = "ai"
 			} else {
-				out += "i"
+				out = "ai"
 			}
 		}
 	case 'β':
@@ -845,13 +860,15 @@ func transliterateGreekSingle(t greekToken, wordStart bool, prevGreek rune, opts
 	case 'ζ':
 		out = "z"
 	case 'η':
-		if opts.lengthMarks {
+		if opts.scheme == greekRomanizationClassical {
+			out = "e"
+		} else if opts.lengthMarks {
 			out = "ē"
 		} else {
 			out = "e"
 		}
 		if t.subscript {
-			if opts.diphthongs == greekDiphthongsLoan {
+			if opts.scheme == greekRomanizationClassical {
 				out = "ei"
 			} else {
 				out += "i"
@@ -869,7 +886,11 @@ func transliterateGreekSingle(t greekToken, wordStart bool, prevGreek rune, opts
 			out = "ĭ"
 		}
 	case 'κ':
-		out = "k"
+		if opts.scheme == greekRomanizationClassical {
+			out = "c"
+		} else {
+			out = "k"
+		}
 	case 'λ':
 		out = "l"
 	case 'μ':
@@ -892,13 +913,11 @@ func transliterateGreekSingle(t greekToken, wordStart bool, prevGreek rune, opts
 	case 'τ':
 		out = "t"
 	case 'υ':
-		out = "u"
-		if opts.lengthMarks && t.diaeresis {
-			out = "ü"
-		} else if opts.lengthMarks && t.long {
-			out = "ū"
+		out = "y"
+		if opts.lengthMarks && t.long {
+			out = "ȳ"
 		} else if opts.lengthMarks && (t.short || opts.defaultShortMarks) {
-			out = "ŭ"
+			out = "y̆"
 		}
 		if t.rough {
 			out = "h" + out
@@ -914,13 +933,15 @@ func transliterateGreekSingle(t greekToken, wordStart bool, prevGreek rune, opts
 	case 'ψ':
 		out = "ps"
 	case 'ω':
-		if opts.lengthMarks {
+		if opts.scheme == greekRomanizationClassical {
+			out = "o"
+		} else if opts.lengthMarks {
 			out = "ō"
 		} else {
 			out = "o"
 		}
 		if t.subscript {
-			if opts.diphthongs == greekDiphthongsLoan {
+			if opts.scheme == greekRomanizationClassical {
 				out = "oi"
 			} else {
 				out += "i"
@@ -987,7 +1008,7 @@ func isLatinVowelForGreek(r rune) bool {
 		'A', 'E', 'I', 'O', 'U', 'Y',
 		'ă', 'Ă', 'ā', 'Ā', 'ĭ', 'Ĭ', 'ī', 'Ī',
 		'ŭ', 'Ŭ', 'ū', 'Ū', 'ē', 'Ē', 'ō', 'Ō',
-		'ï', 'Ï', 'ü', 'Ü':
+		'ȳ', 'Ȳ', 'ï', 'Ï', 'ü', 'Ü':
 		return true
 	default:
 		return false
@@ -1017,6 +1038,12 @@ func accentLatinRune(r rune, t greekToken) string {
 			return "û"
 		case 'U':
 			return "Û"
+		case 'y':
+			return "ŷ"
+		case 'Y':
+			return "Ŷ"
+		case 'ȳ', 'Ȳ':
+			return string(r) + "\u0302"
 		}
 		return string(r) + "\u0302"
 	}
@@ -1046,6 +1073,12 @@ func accentLatinRune(r rune, t greekToken) string {
 			return "ú"
 		case 'U':
 			return "Ú"
+		case 'y':
+			return "ý"
+		case 'Y':
+			return "Ý"
+		case 'ȳ', 'Ȳ':
+			return string(r) + "\u0301"
 		}
 		return string(r) + "\u0301"
 	}

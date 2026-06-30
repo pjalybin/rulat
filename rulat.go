@@ -33,6 +33,7 @@ type dictEntry struct {
 	OriginalGreek string
 	Mode          string // stem or word
 	CaseMode      string // auto or preserve
+	MatchCase     string // any or capitalized
 	Source        string
 	Notes         string
 	URL           string
@@ -129,6 +130,10 @@ func loadDictionary(path string) ([]dictEntry, error) {
 		if caseMode != "auto" && caseMode != "preserve" {
 			return nil, fmt.Errorf("row %d: case_mode must be auto or preserve", row+2)
 		}
+		matchCase := strings.ToLower(get(rec, "match_case", "any"))
+		if matchCase != "any" && matchCase != "capitalized" {
+			return nil, fmt.Errorf("row %d: match_case must be any or capitalized", row+2)
+		}
 		lowerStem := strings.ToLower(stem)
 		entry := dictEntry{
 			CyrStem:       lowerStem,
@@ -138,6 +143,7 @@ func loadDictionary(path string) ([]dictEntry, error) {
 			OriginalGreek: get(rec, "original_greek", ""),
 			Mode:          mode,
 			CaseMode:      caseMode,
+			MatchCase:     matchCase,
 			Source:        get(rec, "source", ""),
 			Notes:         get(rec, "notes", ""),
 			URL:           get(rec, "url", ""),
@@ -217,11 +223,17 @@ func transliterateWord(word []rune, entries []dictEntry, apostrophe bool) string
 		for _, e := range entries {
 			if e.Mode == "word" {
 				if lower == e.CyrStem {
+					if !dictEntryMatchesCase(word, e.MatchCase) {
+						continue
+					}
 					return applyDictCase(word, e.Latin, e.CaseMode)
 				}
 				continue
 			}
 			if hasRunePrefix(lowerRunes, e.CyrRunes) {
+				if !dictEntryMatchesCase(word, e.MatchCase) {
+					continue
+				}
 				stemPart := word[:len(e.CyrRunes)]
 				suffix := word[len(e.CyrRunes):]
 				stemOut := applyDictCase(stemPart, e.Latin, e.CaseMode)
@@ -239,6 +251,13 @@ func transliterateWord(word []rune, entries []dictEntry, apostrophe bool) string
 		}
 	}
 	return transliterateNativeRunes(word, wordAllCaps(word), prevNone, 0)
+}
+
+func dictEntryMatchesCase(word []rune, matchCase string) bool {
+	if matchCase != "capitalized" {
+		return true
+	}
+	return len(word) > 0 && unicode.IsUpper(word[0])
 }
 
 func hasRunePrefix(word, prefix []rune) bool {

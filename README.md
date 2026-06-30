@@ -341,7 +341,7 @@ maestrom   / maestro'm
 Header:
 
 ```csv
-cyrillic_stem,latin_stem,matched_russian_reading,original_latin,original_greek,mode,case_mode,source,notes,suffix_context,url
+cyrillic_stem,latin_stem,matched_russian_reading,original_latin,original_greek,mode,case_mode,match_case,source,notes,suffix_context,url
 ```
 
 Columns:
@@ -355,6 +355,8 @@ original_latin  Optional Latin source spelling or Greek transliteration before s
 original_greek  Optional Greek source spelling before transliteration.
 mode            stem or word. Default: stem.
 case_mode       auto or preserve. Default: auto.
+match_case      any or capitalized. Default: any. Use capitalized for name stems
+                that should match only when the input word starts uppercase.
 source          Optional source-language note.
 notes           Optional free-text note.
 suffix_context  Optional override for how suffixes attach.
@@ -377,8 +379,8 @@ j        suffix follows й/jotation context
 Useful example:
 
 ```csv
-жюль,Jule,,Jules,,word,auto,French,name from Jules,,
-жюл,Jule,,Jules,,stem,auto,French,name stem from Jules,soft,
+жюль,Jule,,Jules,,word,auto,capitalized,French,name from Jules,,
+жюл,Jule,,Jules,,stem,auto,capitalized,French,name stem from Jules,soft,
 ```
 
 This lets the converter produce:
@@ -386,6 +388,7 @@ This lets the converter produce:
 ```text
 Жюль -> Jule
 Жюля -> Julea
+жюля -> zsulea
 ```
 
 without treating the Russian suffix as if it followed a hard native consonant.
@@ -418,10 +421,14 @@ and only loads word pages whose titles consist exclusively of Russian alphabet
 letters, case-insensitively.
 If no etymology candidates are found, the crawler falls back to `Перевод` /
 `Список переводов` sections and reads translation templates such as
-`{{перев|el|Αχιλλέας}}`. Translation fallback is intentionally narrower than
-etymology parsing: `-translation-languages` defaults to `Greek`; pass a
-comma-separated list such as `-translation-languages Greek,English`, or an
-empty value for all translation languages.
+`{{перев|el|Αχιλλέας}}` only when the `Значение` section contains language or
+country markers. For example, `США`/`англ.` prefers the English translation,
+`греческ`/`Греци` prefers Greek, and `франц.` prefers French. If marker-language
+translations are absent, `-translation-languages` is used as a backup on those
+marked pages; by default it uses the same language whitelist as `-languages`,
+accepts a comma-separated list such as `-translation-languages Greek,English`,
+and accepts an empty value for all translation languages. If no `Значение`
+marker is found, translation fallback is skipped.
 Rows are accepted only for noun/name pages. The crawler reads the morphology
 area before etymology, prefers declension/morphology stem templates when they
 are present, concatenates positional Russian morphemes such as
@@ -429,6 +436,8 @@ are present, concatenates positional Russian morphemes such as
 adjective/verb/adverb pages. It then trims the
 candidate source form to the shortest prefix whose possible sound readings
 match the Russian loan stem; if no such prefix exists, the word is skipped.
+Capitalized Wiktionary titles and proper-name pages are emitted with
+`match_case=capitalized`, so `rulat` uses those stems only for capitalized input.
 Source forms are read longest cluster first, then by single letters.
 For example, source `x` can read as Russian `х`, `кс`, or `з`; `ch` as `х`,
 `ч`, `ш`, or `к`; `zh` as `ж`; `sch` as `ш`, `с`, or `ж`; `qu`/`cu` as
@@ -443,27 +452,31 @@ vowels when the Russian stem ends in a consonant, so `альков` from French
 `alcôve` becomes `latin_stem=alcov,original_latin=alcôve`.
 For Greek-script etymologies, basic Ancient Greek declensional stemming is
 applied before transliteration: `εὐαγγέλιον` becomes
-`latin_stem=evangeli,original_latin=evangeli,original_greek=εὐαγγέλιον`.
+`latin_stem=euangeli,original_latin=euangeli,original_greek=εὐαγγέλιον`.
 The `-ιον` family stems to `-ι`, so `εὐαγγέλιον`, `εὐαγγελίου`,
-`εὐαγγελίῳ`, and `εὐαγγέλιᾰ` all produce `evangeli`. Common endings such as
+`εὐαγγελίῳ`, and `εὐαγγέλιᾰ` all produce `euangeli`. Common endings such as
 `-ος`, `-ον`, `-ης`, `-ας`, `-ις`, `-υς`, and `-ους` lose the final case
 consonant. Russian loan stems use the nominative loan shape for common Greek
 neuters, so `πρόβλημα` becomes `problem`, not `problemat`; `-εύς` loses the
 whole ending for names such as `Ἀχιλλεύς -> Achill`, while `-ων` stays intact
 as in `Ἀπόλλων -> Apollon`. Final `ξ` and `ψ` recover basic velar/labial stems
 as `κ` and `π`.
-Greek loan diphthongs use later phonetic values where Russian borrowing
-normally reflects Byzantine pronunciation: `ου -> u`, `αυ/ευ -> av/ev`,
-`υι -> yi`, `ηυ -> ev`, `ωυ -> ov`; iota subscripts map as `ᾳ -> ai`,
-`ῃ -> ei`, and `ῳ -> oi`.
+Greek etymology candidates are romanized in Classical mode: `κ -> c`,
+standalone `υ -> y`, `αι -> ae`, `οι -> oe`, `ου -> u`, and `αυ/ευ/ηυ -> au/eu/eu`.
+Iota subscripts map as `ᾳ -> ai`, `ῃ -> ei`, and `ῳ -> oi`.
 
 The Greek romanizer can also be built and run by itself. It is a text filter
-using standard Ancient Greek romanization; by default it keeps romanization
-diacritics, and `-plain` strips them:
+using ALA-LC romanization by default: `κ -> k`, standalone `υ -> y`, and `υ`
+inside diphthongs as `u`, as in `αυ -> au`, `ευ -> eu`, and `ου -> ou`.
+By default it keeps only ALA-LC length marks such as `ē` and `ō`; `-plain`
+strips them. Macron-only output does not preserve all Greek diacritics:
+accents and short-vowel marks are lost. Use `-rich` when you want those
+diagnostic marks too, for example `Ἄνδρα` becomes `Ắndră`:
 
 ```bash
 GO111MODULE=off go build -tags greektranslit -o greektranslit ./tools
 printf 'Ἄνδρα μοι ἔννεπε, Μοῦσα\n' | ./greektranslit
+printf 'Ἄνδρα μοι ἔννεπε, Μοῦσα\n' | ./greektranslit -rich
 printf 'Ἄνδρα μοι ἔννεπε, Μοῦσα\n' | ./greektranslit -plain
 ```
 
@@ -516,7 +529,9 @@ Cache files are named with the SHA-256 hash of the full request URL, and the
 first line stores the original URL so a hash collision is treated as a cache
 miss and redownloaded. Cache freshness is based on `now - file modified time`;
 `-cache-ttl` defaults to `720h` (30 days), and `-cache-ttl 0` always
-revalidates. Use `-cache-dir ''` to disable the API cache.
+revalidates. Use `-cache-dir ''` to disable the API cache. The final crawler
+summary reports how many Wiktionary API responses were downloaded live instead
+of served from cache.
 
 ## Dictionary matching behavior
 
@@ -573,6 +588,7 @@ When continuing development:
    - `Женя -> Zsaenea`
    - `ЖУК -> ZSUK`
    - dictionary `case_mode=preserve` keeps source capitalization, useful for `Schien`.
+   - dictionary `match_case=capitalized` limits name stems to uppercase input words.
 6. Avoid adding diaeresis to native spelling. Diaeresis is allowed in preserved loan stems such as `poët` and `phaëthon`.
 7. Keep `j` as the only native jotification/Й marker.
 

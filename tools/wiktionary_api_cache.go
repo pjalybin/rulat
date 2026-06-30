@@ -20,9 +20,10 @@ const (
 )
 
 var (
-	apiCacheDir string
-	apiCacheTTL = defaultCacheTTL
-	apiCacheNow = time.Now
+	apiCacheDir    string
+	apiCacheTTL    = defaultCacheTTL
+	apiCacheNow    = time.Now
+	apiCacheMisses int
 )
 
 type apiCacheFlags struct {
@@ -43,7 +44,16 @@ func configureAPICache(flags apiCacheFlags) error {
 	}
 	apiCacheDir = strings.TrimSpace(*flags.dir)
 	apiCacheTTL = *flags.ttl
+	apiCacheMisses = 0
 	return nil
+}
+
+func recordAPICacheMiss() {
+	apiCacheMisses++
+}
+
+func apiCacheMissCount() int {
+	return apiCacheMisses
 }
 
 func readCachedAPIResponse(rawURL string) ([]byte, bool) {

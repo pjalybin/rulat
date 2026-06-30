@@ -41,6 +41,9 @@ func TestDoAPIQueryUsesCachedResponse(t *testing.T) {
 	if requests != 1 {
 		t.Fatalf("requests = %d, want 1", requests)
 	}
+	if got := apiCacheMissCount(); got != 1 {
+		t.Fatalf("apiCacheMissCount() = %d, want 1", got)
+	}
 
 	req, err := newAPIRequest(values)
 	if err != nil {
@@ -91,6 +94,9 @@ func TestDoAPIQueryRedownloadsCacheCollision(t *testing.T) {
 	}
 	if len(parsed.Query.Pages) != 1 || parsed.Query.Pages[0].Title != "fresh" {
 		t.Fatalf("pages = %#v, want fresh page", parsed.Query.Pages)
+	}
+	if got := apiCacheMissCount(); got != 1 {
+		t.Fatalf("apiCacheMissCount() = %d, want 1", got)
 	}
 	data, err := os.ReadFile(apiCachePath(rawURL))
 	if err != nil {
@@ -143,18 +149,24 @@ func TestDoAPIQueryRedownloadsStaleCache(t *testing.T) {
 	if len(parsed.Query.Pages) != 1 || parsed.Query.Pages[0].Title != "fresh" {
 		t.Fatalf("pages = %#v, want fresh page", parsed.Query.Pages)
 	}
+	if got := apiCacheMissCount(); got != 1 {
+		t.Fatalf("apiCacheMissCount() = %d, want 1", got)
+	}
 }
 
 func setTestAPICacheSettings(dir string, ttl time.Duration, now time.Time) func() {
 	oldDir := apiCacheDir
 	oldTTL := apiCacheTTL
 	oldNow := apiCacheNow
+	oldMisses := apiCacheMisses
 	apiCacheDir = dir
 	apiCacheTTL = ttl
 	apiCacheNow = func() time.Time { return now }
+	apiCacheMisses = 0
 	return func() {
 		apiCacheDir = oldDir
 		apiCacheTTL = oldTTL
 		apiCacheNow = oldNow
+		apiCacheMisses = oldMisses
 	}
 }

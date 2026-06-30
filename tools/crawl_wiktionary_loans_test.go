@@ -218,7 +218,7 @@ func TestCrawlWordPagesStreamsAcceptedRows(t *testing.T) {
 			if err != nil {
 				return err
 			}
-			if !strings.Contains(string(data), "фаз,phas,фаз,phase,,stem,auto,English") {
+			if !strings.Contains(string(data), "фаз,phas,фаз,phase,,stem,auto,any,English") {
 				return fmt.Errorf("streamed csv = %q, want accepted row before close", string(data))
 			}
 			streamed = true
@@ -356,6 +356,12 @@ func TestGeneratedOutputPathUsesContentFlags(t *testing.T) {
 	}
 }
 
+func TestDefaultTranslationWhitelistMatchesDefaultLanguageWhitelist(t *testing.T) {
+	if !languageMapsEqual(mustDefaultTranslationLanguageWhitelist(t), mustDefaultLanguageWhitelist(t)) {
+		t.Fatalf("default translation language whitelist should match default source language whitelist")
+	}
+}
+
 func TestWriteCSVWritesHeaderAndRows(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "rows.csv")
 	rows := []csvRow{{
@@ -365,6 +371,7 @@ func TestWriteCSVWritesHeaderAndRows(t *testing.T) {
 		OriginalLatin:         "phase",
 		Mode:                  "stem",
 		CaseMode:              "auto",
+		MatchCase:             "any",
 		Source:                "English",
 		Notes:                 "test",
 		URL:                   "https://example.test/фаза",
@@ -377,10 +384,10 @@ func TestWriteCSVWritesHeaderAndRows(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := string(data)
-	if !strings.Contains(got, "cyrillic_stem,latin_stem,matched_russian_reading,original_latin,original_greek,mode,case_mode,source,notes,suffix_context,url\n") {
+	if !strings.Contains(got, "cyrillic_stem,latin_stem,matched_russian_reading,original_latin,original_greek,mode,case_mode,match_case,source,notes,suffix_context,url\n") {
 		t.Fatalf("csv = %q, want header", got)
 	}
-	if !strings.Contains(got, "фаз,phas,фаз,phase,,stem,auto,English,test,,https://example.test/фаза\n") {
+	if !strings.Contains(got, "фаз,phas,фаз,phase,,stem,auto,any,English,test,,https://example.test/фаза\n") {
 		t.Fatalf("csv = %q, want row", got)
 	}
 }
@@ -444,7 +451,7 @@ func TestRowFromWordPagePrefersDirectDutchDonor(t *testing.T) {
 }
 
 func TestRowFromWordPageFallsBackToTranslationSection(t *testing.T) {
-	page := testWikiPage("Ахиллес", "={{-ru-}}=\n=== Морфологические и синтаксические свойства ===\n{{сущ-ru|Ахилле́с|м 1a}}\n=== Перевод ===\n==== Список переводов ====\n* {{перев|el|Αχιλλέας|м}}\n=== Родственные слова ===\n{{прил ru|ахилле́сов}}\n")
+	page := testWikiPage("Ахиллес", "={{-ru-}}=\n=== Морфологические и синтаксические свойства ===\n{{сущ-ru|Ахилле́с|м 1a}}\n=== Значение ===\n# персонаж древнегреческой мифологии\n=== Перевод ===\n==== Список переводов ====\n* {{перев|el|Αχιλλέας|м}}\n=== Родственные слова ===\n{{прил ru|ахилле́сов}}\n")
 
 	row, ok, filtered := rowFromWordPage(page, crawlOptions{
 		LanguageWhitelist:            map[string]bool{"Greek": true},
@@ -469,8 +476,73 @@ func TestRowFromWordPageFallsBackToTranslationSection(t *testing.T) {
 	}
 }
 
+func TestRowFromWordPageUsesMeaningMarkerForTranslationLanguage(t *testing.T) {
+	page := testWikiPage("Айова", "={{-ru-}}=\n=== Морфологические и синтаксические свойства ===\n{{сущ-ru|Айо́ва|ж 0}}\n=== Значение ===\n# [[штат]] в [[США]]\n=== Этимология ===\nПроисходит от ??\n=== Перевод ===\n==== Список переводов ====\n* {{перев|el|Άιοβα|ж}}\n* {{перев|en|Iowa}}\n")
+
+	row, ok, filtered := rowFromWordPage(page, crawlOptions{
+		LanguageWhitelist:            map[string]bool{"English": true, "Greek": true},
+		TranslationLanguageWhitelist: map[string]bool{"Greek": true},
+		StripStemDiacritics:          true,
+		TrimFinalStemVowels:          true,
+	})
+	if filtered {
+		t.Fatal("row was unexpectedly filtered")
+	}
+	if !ok {
+		t.Fatal("row was not extracted")
+	}
+	if row.CyrillicStem != "айова" || row.LatinStem != "Iowa" || row.OriginalLatin != "Iowa" || row.Source != "English" {
+		t.Fatalf("row = %#v, want айова/Iowa from English translation", row)
+	}
+	if row.MatchedRussianReading != "айова" {
+		t.Fatalf("matched reading = %q, want айова", row.MatchedRussianReading)
+	}
+}
+
+func TestRowFromWordPageMarksCapitalizedNameMatchCase(t *testing.T) {
+	page := testWikiPage("Гипербореи", ruNounPageContent("{{сущ ru m ina 6a|основа=Гиперборе́}}\n{{морфо-ru|Гипер--|бореj|+и}}", "{{lang|la|Hyperborēī|живущие за Бореем}}"))
+
+	row, ok, filtered := rowFromWordPage(page, crawlOptions{
+		StripStemDiacritics: true,
+		TrimFinalStemVowels: true,
+	})
+	if filtered {
+		t.Fatal("row was unexpectedly filtered")
+	}
+	if !ok {
+		t.Fatal("row was not extracted")
+	}
+	if row.MatchCase != "capitalized" {
+		t.Fatalf("match case = %q, want capitalized; row = %#v", row.MatchCase, row)
+	}
+}
+
+func TestMeaningTranslationLanguageWhitelistDetectsDefaultLanguages(t *testing.T) {
+	cases := map[string]string{
+		"город в США":                  "English",
+		"город в Германии":             "German",
+		"коммуна во Франции":           "French",
+		"область в Италии":             "Italian",
+		"персонаж греческой мифологии": "Greek",
+		"древнеримское имя":            "Latin",
+		"город в Нидерландах":          "Dutch",
+		"израильское личное имя":       "Hebrew",
+		"шведская фамилия":             "Swedish",
+		"датский топоним":              "Danish",
+		"испанский остров":             "Spanish",
+		"японский город":               "Japanese",
+	}
+	for meaning, want := range cases {
+		ruSection := "=== Значение ===\n# " + meaning + "\n=== Перевод ===\n"
+		whitelist := meaningTranslationLanguageWhitelist(ruSection)
+		if len(whitelist) != 1 || !whitelist[want] {
+			t.Fatalf("meaningTranslationLanguageWhitelist(%q) = %#v, want only %s", meaning, whitelist, want)
+		}
+	}
+}
+
 func TestRowFromWordPageBuildsStemFromPositionalMorphology(t *testing.T) {
-	page := testWikiPage("Баромир", "={{-ru-}}=\n=== Морфологические и синтаксические свойства ===\n{{сущ-ru|Ба́ромир|м 1a}}\n{{морфо-ru|Бар|о|мир|+∅|и=пример}}\n=== Перевод ===\n{{перев-блок|\n|en={{t|en|Baromir}}\n}}\n")
+	page := testWikiPage("Баромир", "={{-ru-}}=\n=== Морфологические и синтаксические свойства ===\n{{сущ-ru|Ба́ромир|м 1a}}\n{{морфо-ru|Бар|о|мир|+∅|и=пример}}\n=== Значение ===\n# английское имя\n=== Перевод ===\n{{перев-блок|\n|en={{t|en|Baromir}}\n}}\n")
 
 	row, ok, filtered := rowFromWordPage(page, crawlOptions{
 		LanguageWhitelist:            map[string]bool{"English": true},
@@ -489,7 +561,7 @@ func TestRowFromWordPageBuildsStemFromPositionalMorphology(t *testing.T) {
 	}
 }
 
-func TestTranslationFallbackUsesSeparateLanguageWhitelist(t *testing.T) {
+func TestTranslationFallbackRequiresMeaningLanguageMarker(t *testing.T) {
 	page := testWikiPage("Баромир", "={{-ru-}}=\n=== Морфологические и синтаксические свойства ===\n{{сущ-ru|Ба́ромир|м 1a}}\n{{морфо-ru|Бар|о|мир|+∅}}\n=== Перевод ===\n{{перев-блок|\n|en={{t|en|Baromir}}\n}}\n")
 
 	row, ok, filtered := rowFromWordPage(page, crawlOptions{
@@ -502,7 +574,7 @@ func TestTranslationFallbackUsesSeparateLanguageWhitelist(t *testing.T) {
 		t.Fatal("row was unexpectedly filtered")
 	}
 	if ok {
-		t.Fatalf("row = %#v, want English translation candidate ignored by Greek-only translation whitelist", row)
+		t.Fatalf("row = %#v, want translation candidate ignored without meaning marker", row)
 	}
 }
 
@@ -587,6 +659,8 @@ func TestSourceSoundsMatchRussian(t *testing.T) {
 		{"sc as щ", "щ", "sc", true},
 		{"yolk as ёлк", "ёлк", "yolk", true},
 		{"yolk as йолк", "йолк", "yolk", true},
+		{"i as ай", "ай", "i", true},
+		{"Iowa as Айова", "айова", "Iowa", true},
 		{"э normalizes to е", "этика", "etica", true},
 		{"ы normalizes to и", "сыр", "sir", true},
 		{"greek direct diphthong and gamma nasal", "евангел", "ευαγγελ", true},
@@ -653,6 +727,7 @@ func TestTrimLatinStemToRussianSound(t *testing.T) {
 		{"фальшак", "falsus", "stem", "", "", false},
 		{"ёлк", "yolk", "stem", "yolk", "елк", true},
 		{"йолк", "yolk", "stem", "yolk", "йолк", true},
+		{"гиперборе", "Hyperborēī", "word", "Hyperborē", "гиперборе", true},
 	}
 	for _, tc := range cases {
 		got, matchedReading, ok := trimLatinStemToRussianSound(tc.cyr, tc.latin, tc.mode, true)
@@ -711,6 +786,26 @@ func TestRowFromWordPageUsesNounStemAndSoundSimilarity(t *testing.T) {
 			wantStem:  "проблем",
 			wantLatin: "problem",
 			wantRead:  "проблем",
+			wantOK:    true,
+		},
+		{
+			name:      "greek upsilon borrowed as y",
+			title:     "вавилон",
+			morph:     "{{сущ-ru|Вавило́н|м 1a}}\n{{морфо-ru|вавилон|+∅}}",
+			etymology: "{{lang|grc|Βαβυλών}}",
+			wantStem:  "вавилон",
+			wantLatin: "Babylon",
+			wantRead:  "вавилон",
+			wantOK:    true,
+		},
+		{
+			name:      "named noun template stem before morpheme split",
+			title:     "Гипербореи",
+			morph:     "{{сущ ru m ina 6a\n|основа=Гиперборе́\n|основа1=\n|слоги={{по-слогам|Ги|пер|бо|ре́|.|и}}\n|pt=1\n|затрудн=1\n}}\n{{морфо-ru|Гипер--|бореj|+и}}",
+			etymology: "{{lang|la|Hyperborēī|живущие за Бореем}}",
+			wantStem:  "гиперборе",
+			wantLatin: "Hyperbore",
+			wantRead:  "гиперборе",
 			wantOK:    true,
 		},
 		{

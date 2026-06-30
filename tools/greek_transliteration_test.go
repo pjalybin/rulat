@@ -2,41 +2,54 @@ package main
 
 import "testing"
 
-func TestRomanizeGreekAncientText(t *testing.T) {
+func TestRomanizeGreekALALCText(t *testing.T) {
 	input := "Ἄνδρα μοι ἔννεπε, Μοῦσα, πολύτροπον, ὃς μάλα πολλὰ"
-	want := "Ắndră moi énnepe, Moûsă, polŭ́tropon, hós mắlă pollắ"
+	want := "Andra moi ennepe, Mousa, polytropon, hos mala polla"
 
-	got, ok := romanizeGreekAncient(input, true)
+	got, ok := romanizeGreekALALC(input, true)
 	if !ok {
-		t.Fatal("romanizeGreekAncient did not detect Greek input")
+		t.Fatal("romanizeGreekALALC did not detect Greek input")
 	}
 	if got != want {
-		t.Fatalf("romanizeGreekAncient() = %q, want %q", got, want)
+		t.Fatalf("romanizeGreekALALC() = %q, want %q", got, want)
 	}
 
-	plain, ok := romanizeGreekAncient(input, false)
+	plain, ok := romanizeGreekALALC(input, false)
 	if !ok {
-		t.Fatal("romanizeGreekAncient plain did not detect Greek input")
+		t.Fatal("romanizeGreekALALC plain did not detect Greek input")
 	}
-	const plainWant = "Andra moi ennepe, Mousa, polutropon, hos mala polla"
+	const plainWant = "Andra moi ennepe, Mousa, polytropon, hos mala polla"
 	if plain != plainWant {
-		t.Fatalf("romanizeGreekAncient plain = %q, want %q", plain, plainWant)
+		t.Fatalf("romanizeGreekALALC plain = %q, want %q", plain, plainWant)
 	}
 }
 
-func TestGreekLoanDiphthongs(t *testing.T) {
+func TestRomanizeGreekALALCRichText(t *testing.T) {
+	input := "Ἄνδρα μοι ἔννεπε, Μοῦσα, πολύτροπον, ὃς μάλα πολλὰ"
+	want := "Ắndră moi énnepe, Moûsă, polý̆tropon, hós mắlă pollắ"
+
+	got, ok := romanizeGreekALALCRich(input)
+	if !ok {
+		t.Fatal("romanizeGreekALALCRich did not detect Greek input")
+	}
+	if got != want {
+		t.Fatalf("romanizeGreekALALCRich() = %q, want %q", got, want)
+	}
+}
+
+func TestGreekClassicalDiphthongs(t *testing.T) {
 	cases := map[string]string{
 		"ου": "u",
-		"αυ": "av",
-		"ευ": "ev",
-		"υι": "yi",
+		"αυ": "au",
+		"ευ": "eu",
+		"υι": "ui",
 		"ῃ":  "ei",
-		"ηυ": "ev",
+		"ηυ": "eu",
 		"ῳ":  "oi",
-		"ωυ": "ov",
+		"ωυ": "ou",
 		"ᾳ":  "ai",
-		"ᾱυ": "av",
-		"ᾰυ": "av",
+		"ᾱυ": "au",
+		"ᾰυ": "au",
 	}
 	for input, want := range cases {
 		got, ok := transliterateGreek(input)
@@ -49,22 +62,57 @@ func TestGreekLoanDiphthongs(t *testing.T) {
 	}
 }
 
-func TestAncientDiphthongsRemainClassical(t *testing.T) {
+func TestGreekClassicalUsesCY(t *testing.T) {
+	got, ok := transliterateGreek("Βαβυλών")
+	if !ok {
+		t.Fatal("transliterateGreek did not detect Greek input")
+	}
+	if got != "Babylon" {
+		t.Fatalf("transliterateGreek(%q) = %q, want %q", "Βαβυλών", got, "Babylon")
+	}
+
+	kappa, ok := transliterateGreek("Κύρος")
+	if !ok {
+		t.Fatal("transliterateGreek did not detect Greek input")
+	}
+	if kappa != "Cyros" {
+		t.Fatalf("transliterateGreek(%q) = %q, want %q", "Κύρος", kappa, "Cyros")
+	}
+}
+
+func TestGreekALALCDiphthongs(t *testing.T) {
 	cases := map[string]string{
 		"ου": "ou",
 		"αυ": "au",
 		"ευ": "eu",
 		"υι": "ui",
-		"ηυ": "eu",
-		"ωυ": "ou",
+		"ηυ": "ēu",
+		"ωυ": "ōu",
 	}
 	for input, want := range cases {
-		got, ok := romanizeGreekAncient(input, false)
+		got, ok := romanizeGreekALALC(input, true)
 		if !ok {
-			t.Fatalf("romanizeGreekAncient(%q) did not detect Greek input", input)
+			t.Fatalf("romanizeGreekALALC(%q) did not detect Greek input", input)
 		}
 		if got != want {
-			t.Fatalf("romanizeGreekAncient(%q) = %q, want %q", input, got, want)
+			t.Fatalf("romanizeGreekALALC(%q) = %q, want %q", input, got, want)
 		}
+	}
+}
+
+func TestGreekALALCUsesKYAndMacrons(t *testing.T) {
+	got, ok := romanizeGreekALALC("Βαβυλών Κύρος", true)
+	if !ok {
+		t.Fatal("romanizeGreekALALC did not detect Greek input")
+	}
+	if got != "Babylōn Kyros" {
+		t.Fatalf("romanizeGreekALALC() = %q, want %q", got, "Babylōn Kyros")
+	}
+	plain, ok := romanizeGreekALALC("Βαβυλών Κύρος", false)
+	if !ok {
+		t.Fatal("romanizeGreekALALC plain did not detect Greek input")
+	}
+	if plain != "Babylon Kyros" {
+		t.Fatalf("romanizeGreekALALC plain = %q, want %q", plain, "Babylon Kyros")
 	}
 }

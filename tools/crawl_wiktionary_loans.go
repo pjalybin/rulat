@@ -25,7 +25,7 @@ const (
 	apiURL                              = "https://ru.wiktionary.org/w/api.php"
 	defaultAppendixTitle                = "Приложение:Заимствованные слова в русском языке"
 	defaultLanguageWhitelist            = "English,German,French,Italian,Greek,Latin,Dutch,Hebrew,Swedish,Danish,Spanish"
-	defaultTranslationLanguageWhitelist = "Greek"
+	defaultTranslationLanguageWhitelist = defaultLanguageWhitelist
 	defaultHTTPRetries                  = 5
 	defaultHTTPRetryDelay               = 5 * time.Second
 	defaultMaxlag                       = 5
@@ -43,6 +43,7 @@ type csvRow struct {
 	OriginalGreek         string
 	Mode                  string
 	CaseMode              string
+	MatchCase             string
 	Source                string
 	Notes                 string
 	SuffixContext         string
@@ -193,6 +194,23 @@ var (
 		{`исп(?:\.|анск)`, "Spanish"},
 		{`япон(?:\.|ск)`, "Japanese"},
 	}
+	meaningLanguageMarkers = []struct {
+		Pattern string
+		Source  string
+	}{
+		{`англ(?:\.|ийск)|англи|британ|великобрит|соедин[её]нн(?:ые|ых)\s+штат|сша|американск|канада|канадск`, "English"},
+		{`нем(?:\.|ецк)|герман(?:и|ск)|австри(?:я|йск)|швейцар(?:и|ск)|прусс(?:и|к)|бавар(?:и|ск)`, "German"},
+		{`франц(?:\.|узск)|франци|бельги(?:я|йск)|квебек|франкоязыч`, "French"},
+		{`итал(?:\.|ьянск)|итали|сицили(?:я|йск)|сардин(?:и|ск)`, "Italian"},
+		{`др\.-греч\.|древнегреч|греч(?:\.|еск)|греци|эллад|византи(?:я|йск)`, "Greek"},
+		{`лат(?:\.|инск)|римск|римлян|древнеримск|ватикан`, "Latin"},
+		{`нидерл(?:\.|андск)|голл(?:\.|андск)|нидерланд|голланд|фламандск|фландри`, "Dutch"},
+		{`ивр(?:\.|ит)|евр(?:\.|ейск)|древнеевр|израил|иудейск`, "Hebrew"},
+		{`швед(?:\.|ск)|швеци`, "Swedish"},
+		{`датск|дани(?:я|и|ю|ей|йск)`, "Danish"},
+		{`исп(?:\.|анск)|испани|латиноамериканск|мексик|аргентин|перуан|чилийск|колумби(?:я|йск)|кубинск`, "Spanish"},
+		{`япон(?:\.|ск)|япони`, "Japanese"},
+	}
 )
 
 func main() {
@@ -206,7 +224,7 @@ func main() {
 	batchSize := flag.Int("batch-size", 50, "MediaWiki allpages batch size in -source pages mode")
 	progressEvery := flag.Int("progress-every", 0, "log page-mode progress every N inspected pages; 0 disables progress logs")
 	languages := flag.String("languages", defaultLanguageWhitelist, "comma-separated source-language whitelist; empty means all languages")
-	translationLanguages := flag.String("translation-languages", defaultTranslationLanguageWhitelist, "comma-separated source-language whitelist for translation-section fallback; empty means all translation languages")
+	translationLanguages := flag.String("translation-languages", defaultTranslationLanguageWhitelist, "comma-separated source-language whitelist for translation-section fallback; defaults to -languages default; empty means all translation languages")
 	enrichPages := flag.Bool("enrich-pages", false, "fetch each word page and parse etymology/category markers")
 	resolveTemplates := flag.Bool("resolve-etymology-templates", true, "resolve {{этимология:...}} templates in -source pages mode")
 	includePhrases := flag.Bool("include-phrases", false, "keep multi-word Latin source forms")
@@ -371,6 +389,7 @@ func main() {
 	if inspected > 0 {
 		fmt.Fprintf(os.Stderr, "; inspected %d pages", inspected)
 	}
+	fmt.Fprintf(os.Stderr, "; downloaded %d Wiktionary API responses (cache misses)", apiCacheMissCount())
 	if *enrichPages {
 		fmt.Fprintf(os.Stderr, "; enriched %d pages", enriched)
 	}
@@ -644,6 +663,7 @@ func doAPIQuery(client *http.Client, values url.Values) (wikiResponse, error) {
 			return wikiResponse{}, err
 		}
 		if parsed.Error == nil || parsed.Error.Code != "maxlag" {
+			recordAPICacheMiss()
 			writeCachedAPIResponse(cacheURL, body)
 			return parsed, nil
 		}
@@ -992,6 +1012,7 @@ func rowFromWordPage(page wikiPage, opts crawlOptions) (csvRow, bool, bool) {
 			OriginalGreek:         originalGreek,
 			Mode:                  mode,
 			CaseMode:              "auto",
+			MatchCase:             matchCaseForWordPage(page, ruSection),
 			Source:                candidate.Source,
 			Notes:                 notes,
 			SuffixContext:         "",
@@ -1069,7 +1090,79 @@ func russianMorphologyText(ruSection string) string {
 	return ruSection
 }
 
+func matchCaseForWordPage(page wikiPage, ruSection string) string {
+	if matchCaseForTitle(page.Title) == "capitalized" ||
+		russianMorphologyLooksProperName(ruSection) ||
+		categoriesLookProperName(page.Categories) {
+		return "capitalized"
+	}
+	return "any"
+}
+
+func matchCaseForTitle(title string) string {
+	for _, r := range strings.TrimSpace(title) {
+		if isRussianAlphabetLetter(unicode.ToLower(r)) {
+			if unicode.IsUpper(r) {
+				return "capitalized"
+			}
+			return "any"
+		}
+	}
+	return "any"
+}
+
+func russianMorphologyLooksProperName(ruSection string) bool {
+	morphology := russianMorphologyText(ruSection)
+	lowerRaw := strings.ToLower(morphology)
+	if strings.Contains(lowerRaw, "{{собств") {
+		return true
+	}
+	lower := strings.ToLower(stripWikiMarkup(morphology))
+	for _, marker := range []string{
+		"имя собственное",
+		"личное имя",
+		"мужское имя",
+		"женское имя",
+		"топоним",
+		"фамилия",
+	} {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func categoriesLookProperName(categories []wikiCategory) bool {
+	for _, cat := range categories {
+		title := strings.ToLower(cat.Title)
+		for _, marker := range []string{
+			"имена собственные",
+			"мужские имена",
+			"женские имена",
+			"фамилии",
+			"топонимы",
+		} {
+			if strings.Contains(title, marker) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func extractRussianDeclensionStem(text string) string {
+	for _, call := range templateCalls(text) {
+		if len(call) == 0 {
+			continue
+		}
+		if !isRussianNounOrNameTemplate(normalizeTemplateName(call[0])) {
+			continue
+		}
+		if stem := russianNamedStemFromTemplate(call); stem != "" {
+			return stem
+		}
+	}
 	for _, call := range templateCalls(text) {
 		if len(call) == 0 {
 			continue
@@ -1096,14 +1189,18 @@ func extractRussianDeclensionStem(text string) string {
 	return ""
 }
 
-func russianStemFromMorphologyTemplate(call []string) string {
-	named := map[string]string{}
-	for _, arg := range call[1:] {
-		key, value, ok := splitNamedTemplateArg(arg)
-		if ok {
-			named[key] = value
+func russianNamedStemFromTemplate(call []string) string {
+	named := namedTemplateArgs(call[1:])
+	for _, key := range []string{"основа", "основа1"} {
+		if stem := cleanRussianStemCandidate(named[key]); stem != "" {
+			return stem
 		}
 	}
+	return ""
+}
+
+func russianStemFromMorphologyTemplate(call []string) string {
+	named := namedTemplateArgs(call[1:])
 	if stem := cleanRussianStemCandidate(named["основа"]); stem != "" {
 		return stem
 	}
@@ -1128,6 +1225,17 @@ func russianStemFromMorphologyTemplate(call []string) string {
 		return stem
 	}
 	return firstRussianTemplateTerm(call[1:])
+}
+
+func namedTemplateArgs(args []string) map[string]string {
+	named := map[string]string{}
+	for _, arg := range args {
+		key, value, ok := splitNamedTemplateArg(arg)
+		if ok {
+			named[key] = value
+		}
+	}
+	return named
 }
 
 func russianStemFromPositionalMorphologyArgs(args []string) string {
@@ -1270,11 +1378,43 @@ func extractPageLoanCandidates(ruSection string, resolver *templateResolver, tra
 		return candidates
 	}
 
+	candidates = extractTranslationCandidates(ruSection)
+	if meaningLanguageWhitelist := meaningTranslationLanguageWhitelist(ruSection); len(meaningLanguageWhitelist) > 0 {
+		markedCandidates := filterLoanCandidatesByLanguage(candidates, meaningLanguageWhitelist)
+		if len(markedCandidates) > 0 {
+			return markedCandidates
+		}
+		return filterLoanCandidatesByLanguage(candidates, translationLanguageWhitelist)
+	}
+	return nil
+}
+
+func extractTranslationCandidates(ruSection string) []loanCandidate {
+	var candidates []loanCandidate
 	for _, section := range extractTranslationSections(ruSection) {
 		candidates = append(candidates, markCandidateSourceKind(candidatesFromTextMarkers(stripWikiMarkup(section)), "translation")...)
 		candidates = append(candidates, markCandidateSourceKind(candidatesFromTemplates(section), "translation")...)
 	}
-	return filterLoanCandidatesByLanguage(candidates, translationLanguageWhitelist)
+	return candidates
+}
+
+func meaningTranslationLanguageWhitelist(ruSection string) map[string]bool {
+	sections := extractMeaningSections(ruSection)
+	if len(sections) == 0 {
+		return nil
+	}
+	text := strings.ToLower(stripWikiMarkup(strings.Join(sections, "\n")))
+	whitelist := map[string]bool{}
+	for _, marker := range meaningLanguageMarkers {
+		re := regexp.MustCompile(`(?i)` + marker.Pattern)
+		if re.MatchString(text) {
+			whitelist[marker.Source] = true
+		}
+	}
+	if len(whitelist) == 0 {
+		return nil
+	}
+	return whitelist
 }
 
 func filterLoanCandidatesByLanguage(candidates []loanCandidate, languageWhitelist map[string]bool) []loanCandidate {
@@ -1313,6 +1453,13 @@ func extractTranslationSections(ruSection string) []string {
 	return extractNamedSubsections(ruSection, map[string]bool{
 		"перевод":          true,
 		"список переводов": true,
+	})
+}
+
+func extractMeaningSections(ruSection string) []string {
+	return extractNamedSubsections(ruSection, map[string]bool{
+		"значение": true,
+		"значения": true,
 	})
 }
 
@@ -1439,6 +1586,7 @@ func parseAppendix(text string, includePhrases bool, languageWhitelist map[strin
 			OriginalGreek: originalGreek,
 			Mode:          mode,
 			CaseMode:      "auto",
+			MatchCase:     matchCaseForTitle(pageTitle),
 			Source:        source,
 			Notes:         "wiktionary appendix candidate; review before merging",
 			SuffixContext: "",
@@ -1564,7 +1712,7 @@ func trimLatinStemToRussianSound(cyr, latin, mode string, trimFinalStemVowels bo
 		return "", "", false
 	}
 	runes := []rune(strings.TrimSpace(latin))
-	for end := len(runes); end > 0; end-- {
+	for end := 1; end <= len(runes); end++ {
 		prefix := strings.TrimRight(string(runes[:end]), " \t\r\n.,;:()[]{}<>\"“”«»„'’ʼʻ-")
 		if prefix == "" {
 			continue
@@ -1574,9 +1722,6 @@ func trimLatinStemToRussianSound(cyr, latin, mode string, trimFinalStemVowels bo
 		readings := sourceSoundReadings(stem)
 		if matchedVariant, ok := readingsMatchTargetVariant(readings, targetReading); ok {
 			return stem, russianReadingCSVString(matchedVariant), true
-		}
-		if maxTokensInReadings(readings) < len(targetReading) {
-			break
 		}
 	}
 	return "", "", false
@@ -2062,7 +2207,7 @@ func sourceVowelRuneReadings(r rune) (consonantReading, bool) {
 	case 'e':
 		return reading("е", "и", "а"), true
 	case 'i':
-		return reading("и", "е", "й"), true
+		return readingSeqs([]string{"и"}, []string{"е"}, []string{"й"}, []string{"а", "й"}), true
 	case 'o':
 		return reading("о"), true
 	case 'u':
@@ -2568,7 +2713,7 @@ func writeCSV(path string, rows []csvRow) (err error) {
 }
 
 func csvHeaderRecord() []string {
-	return []string{"cyrillic_stem", "latin_stem", "matched_russian_reading", "original_latin", "original_greek", "mode", "case_mode", "source", "notes", "suffix_context", "url"}
+	return []string{"cyrillic_stem", "latin_stem", "matched_russian_reading", "original_latin", "original_greek", "mode", "case_mode", "match_case", "source", "notes", "suffix_context", "url"}
 }
 
 func csvRowRecord(row csvRow) []string {
@@ -2580,11 +2725,20 @@ func csvRowRecord(row csvRow) []string {
 		row.OriginalGreek,
 		row.Mode,
 		row.CaseMode,
+		csvMatchCase(row.MatchCase),
 		row.Source,
 		row.Notes,
 		row.SuffixContext,
 		row.URL,
 	}
+}
+
+func csvMatchCase(matchCase string) string {
+	matchCase = strings.TrimSpace(matchCase)
+	if matchCase == "" {
+		return "any"
+	}
+	return matchCase
 }
 
 func writeCSVRecord(w *csv.Writer, f *os.File, record []string) error {

@@ -12,8 +12,9 @@ import (
 
 func main() {
 	fs := flag.NewFlagSet("greektranslit", flag.ExitOnError)
-	diacritics := fs.Bool("diacritics", true, "keep Ancient Greek romanization diacritics")
-	plain := fs.Bool("plain", false, "strip Ancient Greek romanization diacritics")
+	diacritics := fs.Bool("diacritics", true, "keep ALA-LC length marks")
+	plain := fs.Bool("plain", false, "strip ALA-LC length marks; overrides -rich")
+	rich := fs.Bool("rich", false, "keep ALA-LC length marks plus Greek accents and short marks")
 	fs.Usage = func() {
 		fmt.Fprintf(fs.Output(), "Usage: %s [flags] [GREEK TEXT...]\n\n", os.Args[0])
 		fmt.Fprintln(fs.Output(), "With no text arguments, reads Greek text from stdin.")
@@ -33,7 +34,12 @@ func main() {
 		os.Exit(2)
 	}
 
-	out, _ := romanizeGreekAncient(text, *diacritics && !*plain)
+	var out string
+	if *rich && !*plain {
+		out, _ = romanizeGreekALALCRich(text)
+	} else {
+		out, _ = romanizeGreekALALC(text, *diacritics && !*plain)
+	}
 	fmt.Print(out)
 }
 
