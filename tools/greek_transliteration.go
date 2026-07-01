@@ -209,11 +209,15 @@ func transliterateGreekWithOptions(s string, opts greekTransliterationOptions) (
 			continue
 		}
 
-		if t.base == 'γ' && hasGammaNasal(tokens, i+1) {
-			out.WriteString(applyGreekCase("n", t.upper))
-			wordStart = false
-			prevGreek = t.base
-			continue
+		if next, ok := nextGreekToken(tokens, i+1); ok {
+			_, hasFollowing := nextGreekToken(tokens, next.index+1)
+			if cluster, ok := transliterateGreekConsonantCluster(t, next.greekToken, wordStart, !hasFollowing, opts); ok {
+				out.WriteString(cluster)
+				i = next.index
+				wordStart = false
+				prevGreek = next.base
+				continue
+			}
 		}
 
 		out.WriteString(transliterateGreekSingle(t, wordStart, prevGreek, opts))
@@ -850,17 +854,44 @@ func isGreekVowel(r rune) bool {
 	}
 }
 
-func hasGammaNasal(tokens []greekToken, start int) bool {
-	next, ok := nextGreekToken(tokens, start)
-	if !ok {
-		return false
-	}
-	switch next.base {
-	case 'γ', 'κ', 'ξ', 'χ':
-		return true
+func transliterateGreekConsonantCluster(a, b greekToken, wordStart, wordEnd bool, opts greekTransliterationOptions) (string, bool) {
+	out := ""
+	switch {
+	case a.base == 'γ' && b.base == 'γ':
+		out = "ng"
+	case a.base == 'γ' && b.base == 'κ':
+		if opts.scheme == greekRomanizationALALC {
+			if wordStart || wordEnd {
+				out = "gk"
+			} else {
+				out = "nk"
+			}
+		} else {
+			out = "nc"
+		}
+	case a.base == 'γ' && b.base == 'ξ':
+		out = "nx"
+	case a.base == 'γ' && b.base == 'χ':
+		out = "nch"
+	case opts.scheme == greekRomanizationALALC && a.base == 'μ' && b.base == 'π':
+		if wordStart {
+			out = "b"
+		} else {
+			out = "mp"
+		}
+	case opts.scheme == greekRomanizationALALC && a.base == 'ν' && b.base == 'τ':
+		if wordStart {
+			out = "d"
+		} else {
+			out = "nt"
+		}
 	default:
-		return false
+		return "", false
 	}
+	if a.rough || b.rough {
+		out = "h" + out
+	}
+	return applyGreekCase(out, a.upper), true
 }
 
 func transliterateGreekSingle(t greekToken, wordStart bool, prevGreek rune, opts greekTransliterationOptions) string {

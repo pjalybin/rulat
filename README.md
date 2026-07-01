@@ -470,6 +470,8 @@ Iota subscripts map as `ᾳ -> ai`, `ῃ -> ei`, and `ῳ -> oi`.
 The Greek romanizer can also be built and run by itself. It is a text filter
 using ALA-LC romanization by default: `κ -> k`, standalone `υ -> y`, and `υ`
 inside diphthongs as `u`, as in `αυ -> au`, `ευ -> eu`, and `ου -> ou`.
+It applies ALA-LC positional consonant clusters such as `γκ -> gk`
+initially/finally but `nk` medially, and initial `μπ -> b`, `ντ -> d`.
 By default it keeps only ALA-LC length marks such as `ē` and `ō`; `-plain`
 strips them. Macron-only output does not preserve all Greek diacritics:
 accents and short-vowel marks are lost. Use `-rich` when you want those

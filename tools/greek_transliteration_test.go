@@ -94,6 +94,14 @@ func TestGreekClassicalUsesCY(t *testing.T) {
 	if kappa != "Cyros" {
 		t.Fatalf("transliterateGreek(%q) = %q, want %q", "Κύρος", kappa, "Cyros")
 	}
+
+	anchor, ok := transliterateGreek("ἄγκυρα")
+	if !ok {
+		t.Fatal("transliterateGreek did not detect Greek input")
+	}
+	if anchor != "ancyra" {
+		t.Fatalf("transliterateGreek(%q) = %q, want %q", "ἄγκυρα", anchor, "ancyra")
+	}
 }
 
 func TestGreekALALCDiphthongs(t *testing.T) {
@@ -130,5 +138,26 @@ func TestGreekALALCUsesKYAndMacrons(t *testing.T) {
 	}
 	if plain != "Babylon Kyros" {
 		t.Fatalf("romanizeGreekALALC plain = %q, want %q", plain, "Babylon Kyros")
+	}
+}
+
+func TestGreekALALCConsonantClusters(t *testing.T) {
+	cases := map[string]string{
+		"Γκιζίκης":    "Gkizikēs",
+		"Γκέτεμποργκ": "Gketemporgk",
+		"Ουάσιγκτον":  "Ouasinkton",
+		"ἄγκυρα":      "ankyra",
+		"Μπραντ Πιτ":  "Brant Pit",
+		"Ντίνι":       "Dini",
+		"Λαμπέρτο":    "Lamperto",
+	}
+	for input, want := range cases {
+		got, ok := romanizeGreekALALC(input, true)
+		if !ok {
+			t.Fatalf("romanizeGreekALALC(%q) did not detect Greek input", input)
+		}
+		if got != want {
+			t.Fatalf("romanizeGreekALALC(%q) = %q, want %q", input, got, want)
+		}
 	}
 }
